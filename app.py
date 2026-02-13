@@ -4,8 +4,9 @@ import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Dict, List, Tuple
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 UPBIT_MARKETS_URL = "https://api.upbit.com/v1/market/all"
 UPBIT_TICKER_URL = "https://api.upbit.com/v1/ticker"
@@ -14,24 +15,55 @@ UPBIT_WALLET_STATUS_URL = "https://api.upbit.com/v1/status/wallet"
 BITHUMB_TICKER_ALL_URL = "https://api.bithumb.com/public/ticker/ALL_KRW"
 BITHUMB_ASSET_STATUS_URL = "https://api.bithumb.com/public/assetsstatus/ALL"
 
+TELEGRAM_SEND_URL = "https://api.telegram.org/bot{token}/sendMessage"
+
 THRESHOLD_PERCENT = 5.0
 POLL_INTERVAL_SEC = 20
 ALERT_COOLDOWN_SEC = 120
 REQUEST_TIMEOUT_SEC = 10
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (PriceGapMonitor/1.1)",
+    "Accept": "application/json",
+}
+
+
+class ApiError(Exception):
+    pass
 
 
 def http_get_json(url: str, params: Dict[str, str] | None = None):
     if params:
         url = f"{url}?{urlencode(params)}"
-    with urlopen(url, timeout=REQUEST_TIMEOUT_SEC) as response:
-        return json.loads(response.read().decode("utf-8"))
+
+    req = Request(url, headers=DEFAULT_HEADERS)
+    try:
+        with urlopen(req, timeout=REQUEST_TIMEOUT_SEC) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else ""
+        raise ApiError(f"HTTP {exc.code} for {url} {body[:200]}") from exc
+    except URLError as exc:
+        raise ApiError(f"네트워크 오류: {exc}") from exc
+
+
+def http_post_form_json(url: str, data: Dict[str, str]):
+    payload = urlencode(data).encode("utf-8")
+    req = Request(url, data=payload, headers=DEFAULT_HEADERS, method="POST")
+    try:
+        with urlopen(req, timeout=REQUEST_TIMEOUT_SEC) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else ""
+        raise ApiError(f"HTTP {exc.code} for Telegram API {body[:200]}") from exc
+    except URLError as exc:
+        raise ApiError(f"텔레그램 네트워크 오류: {exc}") from exc
 
 
 class PriceGapMonitorApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("업비트-빗썸 가격차이 알림기")
-        self.root.geometry("980x620")
+        self.root.geometry("1060x670")
 
         self.running = False
         self.worker_thread = None
@@ -70,6 +102,19 @@ class PriceGapMonitorApp:
             text="입출금 불가능한 코인은 알림 끄기",
             variable=self.disable_unavailable_alert,
         ).pack(side=tk.LEFT)
+
+        telegram = ttk.LabelFrame(self.root, text="텔레그램 알림 설정", padding=(12, 10))
+        telegram.pack(fill=tk.X, padx=12, pady=(10, 0))
+
+        ttk.Label(telegram, text="봇 토큰").grid(row=0, column=0, sticky=tk.W)
+        self.telegram_token_entry = ttk.Entry(telegram, width=42)
+        self.telegram_token_entry.grid(row=0, column=1, sticky=tk.W, padx=(8, 16))
+
+        ttk.Label(telegram, text="챗 ID").grid(row=0, column=2, sticky=tk.W)
+        self.telegram_chat_id_entry = ttk.Entry(telegram, width=22)
+        self.telegram_chat_id_entry.grid(row=0, column=3, sticky=tk.W, padx=(8, 16))
+
+        ttk.Button(telegram, text="연결 테스트", command=self.send_telegram_test).grid(row=0, column=4, sticky=tk.W)
 
         status_row = ttk.Frame(self.root, padding=(12, 10))
         status_row.pack(fill=tk.X)
@@ -275,6 +320,24 @@ class PriceGapMonitorApp:
             return False
         return str(value).strip().lower() in {"1", "true", "working", "normal"}
 
+    def send_telegram_message(self, message_text: str):
+        token = self.telegram_token_entry.get().strip()
+        chat_id = self.telegram_chat_id_entry.get().strip()
+        if not token or not chat_id:
+            return
+
+        url = TELEGRAM_SEND_URL.format(token=token)
+        response = http_post_form_json(url, {"chat_id": chat_id, "text": message_text})
+        if not response.get("ok", False):
+            raise ApiError(f"텔레그램 전송 실패: {response}")
+
+    def send_telegram_test(self):
+        try:
+            self.send_telegram_message("✅ 업비트-빗썸 가격차이 알림기 연결 테스트 성공")
+            messagebox.showinfo("텔레그램", "텔레그램 테스트 알림을 전송했습니다.")
+        except Exception as exc:
+            messagebox.showerror("텔레그램", f"전송 실패: {exc}")
+
     def maybe_alert(self, symbol, gap, up, bt, upbit_ok, deposit_ok, withdraw_ok):
         now = time.time()
         last = self.last_alert_times.get(symbol, 0)
@@ -295,6 +358,10 @@ class PriceGapMonitorApp:
     def _show_alert(self, msg):
         self.root.bell()
         messagebox.showinfo("가격 차이 알림", msg)
+        try:
+            self.send_telegram_message(msg)
+        except Exception as exc:
+            self._set_status(f"텔레그램 전송 오류: {exc}")
 
     def render_snapshot(self, rows: List[Tuple]):
         self.tree.delete(*self.tree.get_children())
