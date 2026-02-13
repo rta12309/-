@@ -17,6 +17,7 @@ STATE = {
     "telegram_enabled": False,
     "telegram_token": "",
     "telegram_chat_id": "",
+    "ignore_when_binance_lower": False,
     "last_alert_time": 0.0,
 }
 STATE_LOCK = threading.Lock()
@@ -125,6 +126,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 STATE["telegram_enabled"] = bool(payload.get("telegram_enabled", False))
                 STATE["telegram_token"] = str(payload.get("telegram_token", "")).strip()
                 STATE["telegram_chat_id"] = str(payload.get("telegram_chat_id", "")).strip()
+                STATE["ignore_when_binance_lower"] = bool(payload.get("ignore_when_binance_lower", False))
             return self._send_json({"ok": True, "message": "모니터링 시작"})
 
         if self.path == "/api/stop":
@@ -186,7 +188,19 @@ class AppHandler(BaseHTTPRequestHandler):
             "upbit_binance": diff_percent(upbit_om, binance_om_krw),
             "bithumb_binance": diff_percent(bithumb_om, binance_om_krw),
         }
-        triggered = [{"pair": k, "diff": v} for k, v in diffs.items() if v >= state["threshold"]]
+        triggered = []
+        for pair_name, diff_value in diffs.items():
+            if diff_value < state["threshold"]:
+                continue
+
+            # 옵션 ON이면, 바이낸스 환산가가 더 낮은 케이스는 알림에서 제외
+            if state.get("ignore_when_binance_lower", False):
+                if pair_name == "upbit_binance" and binance_om_krw < upbit_om:
+                    continue
+                if pair_name == "bithumb_binance" and binance_om_krw < bithumb_om:
+                    continue
+
+            triggered.append({"pair": pair_name, "diff": diff_value})
 
         telegram_sent = False
         if triggered and state["telegram_enabled"] and state["telegram_token"] and state["telegram_chat_id"]:

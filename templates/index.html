@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OM 가격차 모니터</title>
+  <title>om가격차 모니터링</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; background: #f4f6f8; }
     .card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
@@ -25,7 +25,7 @@
   </style>
 </head>
 <body>
-  <h2>OM 실시간 가격차 모니터 (업비트/빗썸/바이낸스 선물)</h2>
+  <h2>om가격차 모니터링</h2>
 
   <div class="card">
     <div class="row">
@@ -42,6 +42,7 @@
       <label>쿨다운(초) <input id="cooldown" type="number" min="10" value="300"></label>
       <label><input id="webAlertToggle" type="checkbox" checked> 웹 알림 ON</label>
       <label><input id="tgToggle" type="checkbox"> 텔레그램 ON</label>
+      <label><input id="ignoreBinanceLower" type="checkbox"> 바이낸스 선물가가 더 낮으면 알림 제외</label>
     </div>
     <div class="row" style="margin-top: 8px;">
       <label>Telegram Bot Token <input id="tgToken" type="text" placeholder="12345:ABC..."></label>
@@ -200,6 +201,7 @@
         telegram_enabled: document.getElementById('tgToggle').checked,
         telegram_token: document.getElementById('tgToken').value,
         telegram_chat_id: document.getElementById('tgChatId').value,
+        ignore_when_binance_lower: document.getElementById('ignoreBinanceLower').checked,
       };
       const res = await fetch('/api/start', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
