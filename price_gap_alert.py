@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -30,6 +32,7 @@ UPBIT_WALLET_STATUS_URLS = (
 )
 BITHUMB_TICKER_URL = "https://api.bithumb.com/public/ticker/ALL_KRW"
 BITHUMB_ASSET_STATUS_URL = "https://api.bithumb.com/public/assetsstatus/ALL"
+THEDDARI_SYMBOL_URL = "https://theddari.com/crypto/{symbol}"
 DEFAULT_THRESHOLD = 5.0
 DEFAULT_INTERVAL = 10
 UPBIT_TICKER_BATCH_SIZE = 100  # Upbit ticker endpoint limit
@@ -60,6 +63,12 @@ def fetch_json(url: str, timeout: int = 10) -> dict | list:
     req = urllib.request.Request(url, headers={"User-Agent": "price-gap-alert/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_text(url: str, timeout: int = 10) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 price-gap-alert/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return response.read().decode("utf-8", errors="ignore")
 
 
 def chunked(items: Sequence[str], size: int) -> Iterator[List[str]]:
@@ -203,21 +212,125 @@ def fetch_bithumb_transfer_statuses() -> Dict[str, TransferStatus]:
 
 
 def fetch_transfer_statuses_safe() -> Tuple[Optional[Dict[str, TransferStatus]], Optional[Dict[str, TransferStatus]], List[str]]:
+    return fetch_transfer_statuses_with_fallback([])[:3]
+
+
+def _extract_flag_near(text: str, key: str) -> Optional[bool]:
+    key_group = f"(?:{key})"
+    patterns = [
+        rf"{key_group}\s*[:：\-]?\s*(?P<state>가능|불가|점검|중지|정상|working|normal|suspend(?:ed)?)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        token = str(match.group("state")).lower()
+        if token in {"가능", "정상", "working", "normal"}:
+            return True
+        if token in {"불가", "점검", "중지", "suspend", "suspended"}:
+            return False
+    return None
+
+
+def _extract_exchange_status(section: str) -> Optional[TransferStatus]:
+    deposit = _extract_flag_near(section, "입금|deposit")
+    withdraw = _extract_flag_near(section, "출금|withdraw")
+    if deposit is None or withdraw is None:
+        return None
+    return TransferStatus(deposit_enabled=deposit, withdraw_enabled=withdraw)
+
+
+def parse_theddari_statuses_from_html(raw_html: str) -> Tuple[Optional[TransferStatus], Optional[TransferStatus]]:
+    normalized = re.sub(r"\s+", " ", html.unescape(raw_html))
+
+    def section_around(keyword: str) -> str:
+        idx = normalized.find(keyword)
+        if idx < 0:
+            return ""
+        start = idx
+        end = min(len(normalized), idx + 360)
+        return normalized[start:end]
+
+    upbit_status = _extract_exchange_status(section_around("업비트"))
+    bithumb_status = _extract_exchange_status(section_around("빗썸"))
+    return upbit_status, bithumb_status
+
+
+def fetch_theddari_transfer_statuses(symbols: Sequence[str]) -> Tuple[Dict[str, TransferStatus], Dict[str, TransferStatus], List[str]]:
+    upbit_statuses: Dict[str, TransferStatus] = {}
+    bithumb_statuses: Dict[str, TransferStatus] = {}
+    warnings: List[str] = []
+
+    for symbol in symbols:
+        upper = symbol.upper()
+        url = THEDDARI_SYMBOL_URL.format(symbol=upper)
+        try:
+            raw_html = fetch_text(url)
+            upbit_status, bithumb_status = parse_theddari_statuses_from_html(raw_html)
+            if upbit_status:
+                upbit_statuses[upper] = upbit_status
+            if bithumb_status:
+                bithumb_statuses[upper] = bithumb_status
+            if not upbit_status and not bithumb_status:
+                warnings.append(f"더따리 크롤링 파싱 실패: {upper}")
+        except Exception as err:  # noqa: BLE001
+            warnings.append(f"더따리 크롤링 실패({upper}): {err}")
+
+    return upbit_statuses, bithumb_statuses, warnings
+
+
+def fetch_transfer_statuses_with_fallback(
+    symbols: Sequence[str],
+) -> Tuple[
+    Optional[Dict[str, TransferStatus]],
+    Optional[Dict[str, TransferStatus]],
+    List[str],
+    Dict[str, str],
+    Dict[str, str],
+]:
     warnings: List[str] = []
     upbit_statuses: Optional[Dict[str, TransferStatus]] = None
     bithumb_statuses: Optional[Dict[str, TransferStatus]] = None
+    upbit_sources: Dict[str, str] = {}
+    bithumb_sources: Dict[str, str] = {}
 
     try:
         upbit_statuses = fetch_upbit_transfer_statuses()
+        upbit_sources.update({symbol: "공식API" for symbol in upbit_statuses})
     except Exception as err:  # noqa: BLE001
         warnings.append(f"업비트 입출금 상태 조회 실패: {err}")
 
     try:
         bithumb_statuses = fetch_bithumb_transfer_statuses()
+        bithumb_sources.update({symbol: "공식API" for symbol in bithumb_statuses})
     except Exception as err:  # noqa: BLE001
         warnings.append(f"빗썸 입출금 상태 조회 실패: {err}")
 
-    return upbit_statuses, bithumb_statuses, warnings
+    unresolved_symbols = [
+        s.upper()
+        for s in symbols
+        if (upbit_statuses is None or s.upper() not in upbit_statuses)
+        or (bithumb_statuses is None or s.upper() not in bithumb_statuses)
+    ]
+    if unresolved_symbols:
+        c_up, c_bi, c_warnings = fetch_theddari_transfer_statuses(unresolved_symbols)
+        warnings.extend(c_warnings)
+        if c_up:
+            if upbit_statuses is None:
+                upbit_statuses = {}
+            for symbol, status in c_up.items():
+                if symbol not in upbit_statuses:
+                    upbit_statuses[symbol] = status
+                    upbit_sources[symbol] = "더따리크롤링"
+        if c_bi:
+            if bithumb_statuses is None:
+                bithumb_statuses = {}
+            for symbol, status in c_bi.items():
+                if symbol not in bithumb_statuses:
+                    bithumb_statuses[symbol] = status
+                    bithumb_sources[symbol] = "더따리크롤링"
+
+    return upbit_statuses, bithumb_statuses, warnings, upbit_sources, bithumb_sources
 
 def filter_restricted_coins(
     symbols: Sequence[str],
@@ -296,6 +409,8 @@ def symbol_status_line(
     symbol: str,
     upbit_statuses: Optional[Dict[str, TransferStatus]],
     bithumb_statuses: Optional[Dict[str, TransferStatus]],
+    upbit_sources: Optional[Dict[str, str]] = None,
+    bithumb_sources: Optional[Dict[str, str]] = None,
 ) -> str:
     up = upbit_statuses.get(symbol) if upbit_statuses else None
     bi = bithumb_statuses.get(symbol) if bithumb_statuses else None
@@ -304,10 +419,12 @@ def symbol_status_line(
     up_withdraw = status_value_text(None if up is None else up.withdraw_enabled)
     bi_deposit = status_value_text(None if bi is None else bi.deposit_enabled)
     bi_withdraw = status_value_text(None if bi is None else bi.withdraw_enabled)
+    up_source = (upbit_sources or {}).get(symbol, "-")
+    bi_source = (bithumb_sources or {}).get(symbol, "-")
 
     return (
         f"상태 | {symbol:<10} | 업비트 입금:{up_deposit}/출금:{up_withdraw} "
-        f"| 빗썸 입금:{bi_deposit}/출금:{bi_withdraw}"
+        f"(출처:{up_source}) | 빗썸 입금:{bi_deposit}/출금:{bi_withdraw} (출처:{bi_source})"
     )
 
 
@@ -315,10 +432,15 @@ def render_alert_statuses(
     alerts: Sequence[GapAlert],
     upbit_statuses: Optional[Dict[str, TransferStatus]],
     bithumb_statuses: Optional[Dict[str, TransferStatus]],
+    upbit_sources: Optional[Dict[str, str]] = None,
+    bithumb_sources: Optional[Dict[str, str]] = None,
 ) -> str:
     if not alerts:
         return ""
-    return "\n".join(symbol_status_line(a.symbol, upbit_statuses, bithumb_statuses) for a in alerts)
+    return "\n".join(
+        symbol_status_line(a.symbol, upbit_statuses, bithumb_statuses, upbit_sources, bithumb_sources)
+        for a in alerts
+    )
 
 
 def render_alerts(alerts: Iterable[GapAlert], threshold: float) -> str:
@@ -366,7 +488,9 @@ def monitor(threshold: float, interval: int, once: bool) -> int:
         try:
             upbit_prices = fetch_upbit_prices(symbols)
             bithumb_prices = fetch_bithumb_prices()
-            upbit_statuses, bithumb_statuses, status_warnings = fetch_transfer_statuses_safe()
+            upbit_statuses, bithumb_statuses, status_warnings, upbit_sources, bithumb_sources = (
+                fetch_transfer_statuses_with_fallback(sorted(set(upbit_prices) & set(bithumb_prices)))
+            )
 
             common_symbols = sorted(set(upbit_prices) & set(bithumb_prices))
             tradable_symbols, restricted = filter_restricted_coins(common_symbols, upbit_statuses, bithumb_statuses)
@@ -387,7 +511,7 @@ def monitor(threshold: float, interval: int, once: bool) -> int:
             if alerts:
                 beep()
                 print(render_alerts(alerts, threshold))
-                print(render_alert_statuses(alerts, upbit_statuses, bithumb_statuses))
+                print(render_alert_statuses(alerts, upbit_statuses, bithumb_statuses, upbit_sources, bithumb_sources))
             else:
                 print(f"[{now}] 이상 없음 (기준 {threshold:.2f}%)")
         except urllib.error.URLError as err:

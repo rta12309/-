@@ -41,7 +41,7 @@
 
   <h3>알림 대상 결과</h3>
   <table>
-    <thead><tr><th>코인</th><th>갭%</th><th>업비트</th><th>빗썸</th><th>업비트 입/출금</th><th>빗썸 입/출금</th></tr></thead>
+    <thead><tr><th>코인</th><th>갭%</th><th>업비트</th><th>빗썸</th><th>업비트 입/출금(출처)</th><th>빗썸 입/출금(출처)</th></tr></thead>
     <tbody id="resultBody"></tbody>
   </table>
 
@@ -56,13 +56,76 @@ const upbitWalletUrls=[
 ];
 const bithumbTickerUrl='https://api.bithumb.com/public/ticker/ALL_KRW';
 const bithumbAssetUrl='https://api.bithumb.com/public/assetsstatus/ALL';
+const theddariSymbolUrl=(symbol)=>`https://theddari.com/crypto/${symbol}`;
 
 let timerId = null;
 let isRunning = false;
 
 const boolFlag=(v)=>['1','true','y','yes','working','normal','available'].includes(String(v).toLowerCase().trim());
 const chunk=(arr,size)=>{const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out;};
-const statusText=(x)=>!x ? '확인불가/확인불가' : `${x.d?'가능':'불가'}/${x.w?'가능':'불가'}`;
+const statusText=(x,source='-')=>!x ? `확인불가/확인불가 (${source})` : `${x.d?'가능':'불가'}/${x.w?'가능':'불가'} (${source})`;
+
+async function fetchText(url){
+  const r=await fetch(url);
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.text();
+}
+
+function parseStatusToken(token){
+  const t=String(token).toLowerCase();
+  if(['가능','정상','working','normal'].includes(t)) return true;
+  if(['불가','점검','중지','suspend','suspended'].includes(t)) return false;
+  return null;
+}
+
+function extractFlagNear(text, key){
+  const patterns=[
+    new RegExp(`(?:${key})\\s*[:：\\-]?\\s*(가능|불가|점검|중지|정상|working|normal|suspend(?:ed)?)`,'i')
+  ];
+  for(const p of patterns){
+    const m=text.match(p);
+    if(m){
+      const v=parseStatusToken(m[1]);
+      if(v!==null) return v;
+    }
+  }
+  return null;
+}
+
+function parseTheddariHtml(raw){
+  const normalized=String(raw).replace(/\s+/g,' ');
+  const section=(keyword)=>{
+    const idx=normalized.indexOf(keyword);
+    if(idx<0) return '';
+    return normalized.slice(idx, Math.min(normalized.length, idx+360));
+  };
+  const read=(part)=>{
+    if(!part) return null;
+    const d=extractFlagNear(part,'입금|deposit');
+    const w=extractFlagNear(part,'출금|withdraw');
+    if(d===null || w===null) return null;
+    return {d,w};
+  };
+  return {up:read(section('업비트')), bi:read(section('빗썸'))};
+}
+
+async function fetchTheddariStatuses(symbols){
+  const warnings=[];
+  const up={};
+  const bi={};
+  for(const s of symbols){
+    try{
+      const html=await fetchText(theddariSymbolUrl(s));
+      const parsed=parseTheddariHtml(html);
+      if(parsed.up) up[s]=parsed.up;
+      if(parsed.bi) bi[s]=parsed.bi;
+      if(!parsed.up && !parsed.bi) warnings.push(`더따리 크롤링 파싱 실패: ${s}`);
+    }catch(e){
+      warnings.push(`더따리 크롤링 실패(${s}): ${e.message}`);
+    }
+  }
+  return {up,bi,warnings};
+}
 
 async function jfetch(url){
   const r=await fetch(url);
@@ -99,9 +162,11 @@ async function fetchBithumbPrices(){
   return out;
 }
 
-async function fetchStatusesSafe(){
+async function fetchStatusesSafe(common){
   const warnings=[];
   let up=null, bi=null;
+  const upSrc={};
+  const biSrc={};
   {
     let ok=false;
     for(const url of upbitWalletUrls){
@@ -110,10 +175,12 @@ async function fetchStatusesSafe(){
         if(Array.isArray(data)){
           up={};
           for(const it of data){
-            up[(it.currency||'').toUpperCase()]={
+            const sym=(it.currency||'').toUpperCase();
+            up[sym]={
               d:String(it.wallet_state).toLowerCase()==='working',
               w:String(it.block_state).toLowerCase()==='normal'
             };
+            upSrc[sym]='공식API';
           }
           ok=true;
           break;
@@ -133,14 +200,40 @@ async function fetchStatusesSafe(){
     bi={};
     for(const [sym,info] of Object.entries(data.data||{})){
       if(typeof info!=='object') continue;
-      bi[sym.toUpperCase()]={
+      const upper=sym.toUpperCase();
+      bi[upper]={
         d:boolFlag(info.deposit_status ?? info.deposit ?? info.depositState ?? ''),
         w:boolFlag(info.withdrawal_status ?? info.withdrawal ?? info.withdrawState ?? '')
       };
+      biSrc[upper]='공식API';
     }
   }catch(e){warnings.push(`빗썸 입출금 상태 조회 실패: ${e.message}`);}
 
-  return {up,bi,warnings};
+  const unresolved=common.filter((s)=>!(up&&up[s]) || !(bi&&bi[s]));
+  if(unresolved.length){
+    const crawled=await fetchTheddariStatuses(unresolved);
+    warnings.push(...crawled.warnings);
+    if(Object.keys(crawled.up).length){
+      if(!up) up={};
+      for(const [sym,val] of Object.entries(crawled.up)){
+        if(!up[sym]){
+          up[sym]=val;
+          upSrc[sym]='더따리크롤링';
+        }
+      }
+    }
+    if(Object.keys(crawled.bi).length){
+      if(!bi) bi={};
+      for(const [sym,val] of Object.entries(crawled.bi)){
+        if(!bi[sym]){
+          bi[sym]=val;
+          biSrc[sym]='더따리크롤링';
+        }
+      }
+    }
+  }
+
+  return {up,bi,warnings,upSrc,biSrc};
 }
 
 function filterCoins(common,up,bi){
@@ -191,13 +284,14 @@ async function run(){
 
   try{
     const symbols=await fetchUpbitSymbols();
-    const [upPrices,biPrices,statuses]=await Promise.all([fetchUpbitPrices(symbols),fetchBithumbPrices(),fetchStatusesSafe()]);
+    const [upPrices,biPrices]=await Promise.all([fetchUpbitPrices(symbols),fetchBithumbPrices()]);
     const common=Object.keys(upPrices).filter(s=>biPrices[s]!=null).sort();
+    const statuses=await fetchStatusesSafe(common);
     const {tradable,restricted}=filterCoins(common,statuses.up,statuses.bi);
 
     warningsEl.textContent=statuses.warnings.join(' | ');
     if(restricted.length){
-      restrictedEl.innerHTML=restricted.slice(0,20).map(x=>`- ${x.s}: 업비트 ${statusText(x.u)}, 빗썸 ${statusText(x.b)}`).join('<br/>');
+      restrictedEl.innerHTML=restricted.slice(0,20).map(x=>`- ${x.s}: 업비트 ${statusText(x.u,statuses.upSrc?.[x.s]||'-')}, 빗썸 ${statusText(x.b,statuses.biSrc?.[x.s]||'-')}`).join('<br/>');
       if(restricted.length>20) restrictedEl.innerHTML += `<br/>... 외 ${restricted.length-20}개`;
     } else restrictedEl.textContent='없음';
 
@@ -212,7 +306,7 @@ async function run(){
 
     for(const r of rows){
       const tr=document.createElement('tr');
-      tr.innerHTML=`<td>${r.s}</td><td>${r.gap.toFixed(2)}%</td><td>${r.u.toLocaleString()}</td><td>${r.b.toLocaleString()}</td><td>${statusText(r.upStatus)}</td><td>${statusText(r.biStatus)}</td>`;
+      tr.innerHTML=`<td>${r.s}</td><td>${r.gap.toFixed(2)}%</td><td>${r.u.toLocaleString()}</td><td>${r.b.toLocaleString()}</td><td>${statusText(r.upStatus, statuses.upSrc?.[r.s]||'-')}</td><td>${statusText(r.biStatus, statuses.biSrc?.[r.s]||'-')}</td>`;
       body.appendChild(tr);
     }
 
