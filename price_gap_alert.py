@@ -17,6 +17,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import islice
@@ -36,6 +37,8 @@ THEDDARI_SYMBOL_URL = "https://theddari.com/crypto/{symbol}"
 DEFAULT_THRESHOLD = 5.0
 DEFAULT_INTERVAL = 10
 UPBIT_TICKER_BATCH_SIZE = 100  # Upbit ticker endpoint limit
+THEDDARI_CRAWL_TIMEOUT = 4
+THEDDARI_CRAWL_WORKERS = 8
 
 
 @dataclass(frozen=True)
@@ -59,13 +62,16 @@ class RestrictedCoin:
     bithumb: TransferStatus
 
 
+
+THEDDARI_STATUS_CACHE: Dict[str, Tuple[Optional[TransferStatus], Optional[TransferStatus]]] = {}
+
 def fetch_json(url: str, timeout: int = 10) -> dict | list:
     req = urllib.request.Request(url, headers={"User-Agent": "price-gap-alert/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-def fetch_text(url: str, timeout: int = 10) -> str:
+def fetch_text(url: str, timeout: int = THEDDARI_CRAWL_TIMEOUT) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 price-gap-alert/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return response.read().decode("utf-8", errors="ignore")
@@ -261,20 +267,45 @@ def fetch_theddari_transfer_statuses(symbols: Sequence[str]) -> Tuple[Dict[str, 
     bithumb_statuses: Dict[str, TransferStatus] = {}
     warnings: List[str] = []
 
+    unresolved: List[str] = []
+    seen_unresolved: set[str] = set()
     for symbol in symbols:
         upper = symbol.upper()
+        cached = THEDDARI_STATUS_CACHE.get(upper)
+        if cached is None:
+            if upper not in seen_unresolved:
+                unresolved.append(upper)
+                seen_unresolved.add(upper)
+            continue
+        upbit_cached, bithumb_cached = cached
+        if upbit_cached is not None:
+            upbit_statuses[upper] = upbit_cached
+        if bithumb_cached is not None:
+            bithumb_statuses[upper] = bithumb_cached
+
+    def crawl_one(upper: str) -> Tuple[str, Optional[TransferStatus], Optional[TransferStatus], Optional[str]]:
         url = THEDDARI_SYMBOL_URL.format(symbol=upper)
         try:
             raw_html = fetch_text(url)
             upbit_status, bithumb_status = parse_theddari_statuses_from_html(raw_html)
-            if upbit_status:
-                upbit_statuses[upper] = upbit_status
-            if bithumb_status:
-                bithumb_statuses[upper] = bithumb_status
             if not upbit_status and not bithumb_status:
-                warnings.append(f"더따리 크롤링 파싱 실패: {upper}")
+                return upper, None, None, f"더따리 크롤링 파싱 실패: {upper}"
+            return upper, upbit_status, bithumb_status, None
         except Exception as err:  # noqa: BLE001
-            warnings.append(f"더따리 크롤링 실패({upper}): {err}")
+            return upper, None, None, f"더따리 크롤링 실패({upper}): {err}"
+
+    if unresolved:
+        with ThreadPoolExecutor(max_workers=min(THEDDARI_CRAWL_WORKERS, len(unresolved))) as executor:
+            futures = [executor.submit(crawl_one, symbol) for symbol in unresolved]
+            for future in as_completed(futures):
+                symbol, upbit_status, bithumb_status, warning = future.result()
+                THEDDARI_STATUS_CACHE[symbol] = (upbit_status, bithumb_status)
+                if upbit_status is not None:
+                    upbit_statuses[symbol] = upbit_status
+                if bithumb_status is not None:
+                    bithumb_statuses[symbol] = bithumb_status
+                if warning:
+                    warnings.append(warning)
 
     return upbit_statuses, bithumb_statuses, warnings
 

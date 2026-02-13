@@ -13,6 +13,10 @@
     th{background:#f5f5f5}
     .warn{color:#b35a00;white-space:pre-wrap}
     .muted{color:#666}
+    .status-wrap{display:flex;align-items:center;gap:8px;min-height:24px}
+    .spinner{width:14px;height:14px;border:2px solid #ddd;border-top-color:#2b6df8;border-radius:50%;display:none;animation:spin 0.8s linear infinite}
+    .spinner.show{display:inline-block}
+    @keyframes spin{to{transform:rotate(360deg)}}
   </style>
 </head>
 <body>
@@ -33,7 +37,7 @@
     <button id="testTelegramBtn">텔레그램 테스트</button>
   </div>
 
-  <p id="status"></p>
+  <div class="status-wrap"><span id="loadingIcon" class="spinner" aria-label="loading"></span><p id="status"></p></div>
   <p id="warnings" class="warn"></p>
 
   <h3>입출금 제한 코인(알림 제외)</h3>
@@ -60,6 +64,8 @@ const theddariSymbolUrl=(symbol)=>`https://theddari.com/crypto/${symbol}`;
 
 let timerId = null;
 let isRunning = false;
+const theddariCache = new Map();
+const THEDDARI_CONCURRENCY = 8;
 
 const boolFlag=(v)=>['1','true','y','yes','working','normal','available'].includes(String(v).toLowerCase().trim());
 const chunk=(arr,size)=>{const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out;};
@@ -113,19 +119,41 @@ async function fetchTheddariStatuses(symbols){
   const warnings=[];
   const up={};
   const bi={};
-  for(const s of symbols){
+
+  const unresolved=[];
+  for(const raw of symbols){
+    const s=String(raw).toUpperCase();
+    if(theddariCache.has(s)){
+      const cached=theddariCache.get(s);
+      if(cached.up) up[s]=cached.up;
+      if(cached.bi) bi[s]=cached.bi;
+      continue;
+    }
+    unresolved.push(s);
+  }
+
+  async function crawlOne(s){
     try{
       const html=await fetchText(theddariSymbolUrl(s));
       const parsed=parseTheddariHtml(html);
+      theddariCache.set(s, parsed);
       if(parsed.up) up[s]=parsed.up;
       if(parsed.bi) bi[s]=parsed.bi;
       if(!parsed.up && !parsed.bi) warnings.push(`더따리 크롤링 파싱 실패: ${s}`);
     }catch(e){
+      theddariCache.set(s, {up:null, bi:null});
       warnings.push(`더따리 크롤링 실패(${s}): ${e.message}`);
     }
   }
+
+  for(let i=0;i<unresolved.length;i+=THEDDARI_CONCURRENCY){
+    const batch=unresolved.slice(i, i+THEDDARI_CONCURRENCY);
+    await Promise.all(batch.map(crawlOne));
+  }
+
   return {up,bi,warnings};
 }
+
 
 async function jfetch(url){
   const r=await fetch(url);
@@ -266,11 +294,19 @@ async function sendTelegramMessage(text){
   }
 }
 
+
+function setLoading(isLoading){
+  const icon=document.getElementById('loadingIcon');
+  if(!icon) return;
+  icon.classList.toggle('show', isLoading);
+}
+
 async function run(){
   if(isRunning){
     return;
   }
   isRunning = true;
+  setLoading(true);
   const now = new Date().toLocaleString();
   const t=Number(document.getElementById('threshold').value||5);
   const status=document.getElementById('status');
@@ -328,6 +364,7 @@ async function run(){
     warningsEl.textContent=String(e);
   } finally {
     isRunning = false;
+    setLoading(false);
   }
 }
 
