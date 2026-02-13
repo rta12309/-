@@ -71,63 +71,73 @@ python3 price_gap_alert.py --threshold 7.5 --once
 
 ## CORS 해결용 업비트 프록시 서버 (Flask)
 
-브라우저에서 업비트 `https://api.upbit.com/v1/status/wallet`를 직접 호출하면 CORS 문제로 `Failed to fetch`가 날 수 있습니다.
-아래 구조로 해결합니다.
+브라우저에서 업비트 `https://api.upbit.com/v1/status/wallet`를 직접 호출하면 CORS/인증 문제로 실패할 수 있습니다.
+이 프로젝트는 아래 구조로 해결합니다.
 
-- 프론트 → `GET /api/upbit_wallet_status` (내 서버만 호출)
-- 내 서버 → 업비트 API 호출
+- 프론트 → `GET/POST /api/*` (내 서버만 호출)
+- 내 서버 → 업비트 API 호출(JWT 인증)
 - 내 서버가 JSON 결과만 프론트에 전달
 
 ### 파일
 
-- `app.py`: Flask 프록시 서버 (CORS, preflight, health/debug, 업비트 인증 호출)
-- `upbit_wallet_status_client.html`: 버튼 기반 테스트 프론트
+- `app.py`: Flask 프록시 서버 (CORS, preflight, 키 저장/로드, JWT 인증 호출)
+- `upbit_wallet_status_client.html`: 초보자용 버튼 UI(키 저장/테스트/입출금 조회)
+- `RUN_WINDOWS.bat`: 윈도우 더블클릭 실행 파일
 
 ### 의존성 설치
 
 ```bash
-python3 -m pip install flask requests pyjwt python-dotenv
-```
-
-### .env 설정 (필수)
-
-`/v1/status/wallet`은 인증이 필요한 API라 키가 필요합니다. 프로젝트 루트에 `.env`를 만들고 입력하세요.
-
-```env
-UPBIT_ACCESS_KEY=여기에_액세스키
-UPBIT_SECRET_KEY=여기에_시크릿키
-```
-
-키가 없으면 `/api/upbit_wallet_status`는 아래처럼 반환합니다.
-
-```json
-{"error":"MISSING_UPBIT_KEYS","hint":"Add UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY"}
+python3 -m pip install flask requests pyjwt
 ```
 
 ### 실행
+
+- 일반 실행:
 
 ```bash
 python3 app.py
 ```
 
+- 윈도우 더블클릭 실행:
+  - `RUN_WINDOWS.bat`
+
 브라우저 접속:
 
 - `http://127.0.0.1:8000/`
 
-### 엔드포인트
+### API 키 저장 방식
+
+- `POST /api/upbit_keys`
+  - 입력 JSON: `{ "access_key": "...", "secret_key": "..." }`
+  - 프로젝트 폴더의 `config.json`에 저장
+- `GET /api/upbit_keys`
+  - 저장 여부만 반환
+  - 예: `{ "has_access_key": true, "has_secret_key": true }`
+
+보안을 위해 `config.json`은 Git에 올리면 안 됩니다.
+(이 저장소는 `.gitignore`에 `config.json`을 포함합니다.)
+
+### 인증(JWT) 호출
+
+- `GET /api/upbit_key_test`
+  - 저장된 키로 인증 테스트(업비트 계정 조회 API 호출)
+- `GET /api/upbit_wallet_status`
+  - 저장된 키로 `/v1/status/wallet` 호출
+- 키가 없으면 아래 JSON 반환:
+
+```json
+{"error":"MISSING_UPBIT_KEYS","hint":"Add UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY"}
+```
+
+### 디버그/헬스
 
 - `GET /health` → `{"ok": true}`
-- `GET /api/upbit_wallet_status`
-  - 어떤 상황에서도 JSON 반환(성공/401/429/5xx/예외)
-  - 응답에 CORS 헤더 항상 포함
-- `OPTIONS /api/upbit_wallet_status`
-  - preflight 200 처리
+- `GET /debug/upbit_raw` → 업비트 상태코드 + 본문 미리보기
+
+### CORS / preflight
+
+- 모든 응답(성공/오류/예외)에 CORS 헤더를 붙입니다.
+- `OPTIONS` 요청을 명시 처리합니다.
   - `Access-Control-Allow-Origin: *`
-  - `Access-Control-Allow-Methods: GET, OPTIONS`
+  - `Access-Control-Allow-Methods: GET, POST, OPTIONS`
   - `Access-Control-Allow-Headers: Content-Type, Authorization`
-- `GET /debug/upbit_raw`
-  - 업비트 원본 status code와 body preview 반환(디버그용)
-
-### CORS 정책
-
-`app.py`는 `after_request` + 예외 핸들러를 사용해 **모든 응답**(성공/에러/예외)에 CORS 헤더를 붙입니다.

@@ -5,11 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>업비트 입출금 상태 조회</title>
   <style>
-    body { font-family: Arial, sans-serif; max-width: 980px; margin: 24px auto; padding: 0 12px; }
-    button { padding: 10px 14px; cursor: pointer; margin-right: 8px; }
-    .status { margin-top: 12px; color: #333; }
+    body { font-family: Arial, sans-serif; max-width: 1000px; margin: 24px auto; padding: 0 12px; }
+    input { padding: 8px; width: 100%; box-sizing: border-box; }
+    button { padding: 10px 14px; cursor: pointer; margin-right: 8px; margin-top: 8px; }
+    .status { margin-top: 10px; color: #333; }
     .error { color: #c62828; white-space: pre-wrap; }
     .ok { color: #2e7d32; }
+    .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
     table { width: 100%; border-collapse: collapse; margin-top: 12px; }
     th, td { border: 1px solid #ddd; padding: 8px; font-size: 13px; }
     th { background: #f5f5f5; }
@@ -17,14 +19,28 @@
 </head>
 <body>
   <h2>업비트 입출금 상태 조회 (서버 프록시)</h2>
-  <p>프론트는 업비트를 직접 호출하지 않고, <code>/api/upbit_wallet_status</code>만 호출합니다.</p>
+  <p>프론트는 업비트를 직접 호출하지 않고 <code>/api/*</code>만 호출합니다.</p>
 
-  <button id="healthBtn">서버 상태 확인(/health)</button>
-  <button id="loadBtn">업비트 입출금 상태 조회</button>
+  <div class="card">
+    <h3>1) 업비트 API 키 입력</h3>
+    <label>Upbit Access Key</label>
+    <input id="accessKey" type="text" placeholder="Access Key 입력" />
 
-  <p id="health" class="status">헬스체크 미실행</p>
-  <p id="status" class="status">대기 중</p>
-  <p id="error" class="error"></p>
+    <label style="margin-top:8px;display:block;">Upbit Secret Key</label>
+    <input id="secretKey" type="password" placeholder="Secret Key 입력" />
+
+    <div>
+      <button id="saveKeysBtn">키 저장</button>
+      <button id="testKeysBtn">키 테스트(getMe)</button>
+      <button id="healthBtn">서버 상태 확인(/health)</button>
+      <button id="loadBtn">입출금 상태 조회</button>
+    </div>
+
+    <p id="keyState" class="status">키 저장 상태 확인 중...</p>
+    <p id="health" class="status">헬스체크 미실행</p>
+    <p id="status" class="status">대기 중</p>
+    <p id="error" class="error"></p>
+  </div>
 
   <table>
     <thead>
@@ -38,12 +54,78 @@
   </table>
 
   <script>
+    const accessKeyEl = document.getElementById('accessKey');
+    const secretKeyEl = document.getElementById('secretKey');
+    const saveKeysBtn = document.getElementById('saveKeysBtn');
+    const testKeysBtn = document.getElementById('testKeysBtn');
     const healthBtn = document.getElementById('healthBtn');
     const loadBtn = document.getElementById('loadBtn');
+    const keyStateEl = document.getElementById('keyState');
     const healthEl = document.getElementById('health');
     const statusEl = document.getElementById('status');
     const errorEl = document.getElementById('error');
     const resultBody = document.getElementById('resultBody');
+
+    function showError(text) {
+      errorEl.textContent = text;
+    }
+
+    async function refreshKeyState() {
+      try {
+        const res = await fetch('/api/upbit_keys');
+        const data = await res.json();
+        keyStateEl.textContent = `키 저장 상태: access=${data.has_access_key}, secret=${data.has_secret_key}`;
+        keyStateEl.className = (data.has_access_key && data.has_secret_key) ? 'status ok' : 'status';
+      } catch (err) {
+        keyStateEl.textContent = `키 상태 확인 실패: ${err.message}`;
+        keyStateEl.className = 'status error';
+      }
+    }
+
+    async function saveKeys() {
+      showError('');
+      const access_key = accessKeyEl.value.trim();
+      const secret_key = secretKeyEl.value.trim();
+      if (!access_key || !secret_key) {
+        showError('Access Key와 Secret Key를 모두 입력하세요.');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/upbit_keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ access_key, secret_key }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          showError(`키 저장 실패: ${JSON.stringify(data)}`);
+          return;
+        }
+        statusEl.textContent = '키 저장 완료';
+        await refreshKeyState();
+      } catch (err) {
+        showError(`키 저장 예외: ${err.message}`);
+      }
+    }
+
+    async function testKeys() {
+      showError('');
+      statusEl.textContent = '키 테스트 중...';
+      try {
+        const res = await fetch('/api/upbit_key_test');
+        const data = await res.json();
+        if (data.error || data.ok === false) {
+          statusEl.textContent = '키 테스트 실패';
+          showError(`키 테스트 응답: HTTP ${res.status} / ${JSON.stringify(data)}`);
+          return;
+        }
+        statusEl.textContent = `키 테스트 성공 (upbit_status=${data.upbit_status_code})`;
+      } catch (err) {
+        statusEl.textContent = '키 테스트 실패';
+        showError(`키 테스트 예외: ${err.message}`);
+      }
+    }
 
     async function checkHealth() {
       healthEl.textContent = '헬스체크 중...';
@@ -63,26 +145,20 @@
 
     async function loadWalletStatus() {
       statusEl.textContent = '조회 중...';
-      errorEl.textContent = '';
+      showError('');
       resultBody.innerHTML = '';
 
       try {
         const res = await fetch('/api/upbit_wallet_status');
         const data = await res.json();
 
-        if (!res.ok) {
-          errorEl.textContent = `HTTP ${res.status} / ${JSON.stringify(data)}`;
+        if (!res.ok || data.error || data.ok === false) {
           statusEl.textContent = '실패';
+          showError(`입출금 조회 응답: HTTP ${res.status} / ${JSON.stringify(data)}`);
           return;
         }
 
-        if (data.error) {
-          errorEl.textContent = `API 오류: HTTP ${res.status} / ${JSON.stringify(data)}`;
-          statusEl.textContent = '실패';
-          return;
-        }
-
-        const rows = Array.isArray(data.data) ? data.data : (Array.isArray(data.data?.data) ? data.data.data : []);
+        const rows = Array.isArray(data.data) ? data.data : [];
         for (const item of rows) {
           const tr = document.createElement('tr');
           tr.innerHTML = `
@@ -93,18 +169,20 @@
           resultBody.appendChild(tr);
         }
 
-        statusEl.textContent = `완료: HTTP ${res.status}, upbit_status=${data.upbit_status_code ?? '-'}, ${rows.length}개 코인`;
+        statusEl.textContent = `완료: upbit_status=${data.upbit_status_code ?? '-'}, ${rows.length}개 코인`;
       } catch (err) {
         statusEl.textContent = '실패';
-        errorEl.textContent = `fetch 예외: ${err.message}`;
+        showError(`fetch 예외: ${err.message}`);
       }
     }
 
+    saveKeysBtn.addEventListener('click', saveKeys);
+    testKeysBtn.addEventListener('click', testKeys);
     healthBtn.addEventListener('click', checkHealth);
     loadBtn.addEventListener('click', loadWalletStatus);
 
-    // 페이지 로드 시 먼저 서버 생존 확인
     checkHealth();
+    refreshKeyState();
   </script>
 </body>
 </html>
