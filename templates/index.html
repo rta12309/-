@@ -9,7 +9,7 @@
     .card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
     .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     label { font-size: 14px; }
-    input[type="number"], input[type="text"] { padding: 6px; width: 130px; }
+    input[type="number"], input[type="text"] { padding: 6px; width: 150px; }
     button { padding: 8px 12px; cursor: pointer; }
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
@@ -17,13 +17,13 @@
     .danger { background: #ffe4e4; color: #9a0000; font-weight: bold; }
     .ok { background: #ecfff0; color: #00641c; }
     .muted { color: #666; font-size: 12px; }
-    .warningBox { background: #fff6d6; border: 1px solid #ffdb7a; padding: 8px; border-radius: 6px; margin-top: 8px; }
+    .warningBox { background: #fff6d6; border: 1px solid #ffdb7a; padding: 8px; border-radius: 6px; margin-top: 8px; display: none; }
     #toast { position: fixed; bottom: 20px; right: 20px; background: #333; color: #fff; padding: 10px 14px; border-radius: 8px; display: none; z-index: 1000; }
     #errorLog { max-height: 140px; overflow-y: auto; background: #111; color: #ffb4b4; padding: 10px; white-space: pre-wrap; }
   </style>
 </head>
 <body>
-  <h2>om가격차 모니터링</h2>
+  <h2>om가격차 모니터링 (웹 전용)</h2>
 
   <div class="card">
     <div class="row">
@@ -46,20 +46,18 @@
       <label>Telegram Bot Token <input id="tgToken" type="text" placeholder="12345:ABC..."></label>
       <label>Telegram Chat ID <input id="tgChatId" type="text" placeholder="987654321"></label>
     </div>
-    <div id="gapNotice" class="warningBox" style="display:none;"></div>
+    <div id="gapNotice" class="warningBox"></div>
   </div>
 
   <div class="card">
     <h3>현재 가격</h3>
     <table>
-      <thead>
-        <tr><th>항목</th><th>가격</th></tr>
-      </thead>
+      <thead><tr><th>항목</th><th>가격</th></tr></thead>
       <tbody>
         <tr><td>업비트 KRW-OM</td><td id="pUpbit">-</td></tr>
         <tr><td>빗썸 OM_KRW</td><td id="pBithumb">-</td></tr>
         <tr><td>바이낸스 현물 OMUSDT</td><td id="pBinanceSpotUsdt">-</td></tr>
-        <tr><td>바이낸스 선물 OMUSDT (알림 차단 조건 확인용)</td><td id="pBinanceFuturesUsdt">-</td></tr>
+        <tr><td>바이낸스 선물 OMUSDT (차단조건 확인용)</td><td id="pBinanceFuturesUsdt">-</td></tr>
         <tr><td>USDT→KRW (업비트 KRW-USDT)</td><td id="pUsdtKrw">-</td></tr>
         <tr><td>바이낸스 현물 환산 KRW</td><td id="pBinanceSpotKrw">-</td></tr>
       </tbody>
@@ -70,9 +68,7 @@
   <div class="card">
     <h3>가격 차이(diff%) - 업비트/빗썸/바이낸스 현물 비교</h3>
     <table>
-      <thead>
-        <tr><th>비교쌍</th><th>diff%</th><th>상태</th></tr>
-      </thead>
+      <thead><tr><th>비교쌍</th><th>diff%</th><th>상태</th></tr></thead>
       <tbody>
         <tr id="row-upbit_bithumb"><td>업비트 ↔ 빗썸</td><td id="dUpbitBithumb">-</td><td id="sUpbitBithumb">-</td></tr>
         <tr id="row-upbit_binance_spot"><td>업비트 ↔ 바이낸스 현물(환산)</td><td id="dUpbitBinanceSpot">-</td><td id="sUpbitBinanceSpot">-</td></tr>
@@ -89,8 +85,10 @@
   <div id="toast"></div>
 
   <script>
+    const BINANCE_GAP_THRESHOLD = 2.0;
     let timer = null;
     let lastWebAlertAt = 0;
+    let lastTelegramAlertAt = 0;
 
     function showToast(message) {
       const t = document.getElementById('toast');
@@ -121,7 +119,6 @@
     function notifyWeb(message) {
       showToast(message);
       beep();
-      alert(message);
       if ('Notification' in window && Notification.permission === 'granted') {
         new Notification('OM 가격차 알림', { body: message });
       }
@@ -129,6 +126,12 @@
 
     function num(v, digits = 2) {
       return Number(v).toLocaleString('ko-KR', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+    }
+
+    function diffPercent(a, b) {
+      const minV = Math.min(a, b);
+      if (!isFinite(minV) || minV <= 0) return 0;
+      return Math.abs(a - b) / minV * 100;
     }
 
     function updateDiffRow(key, value, threshold) {
@@ -149,51 +152,105 @@
       }
     }
 
-    async function fetchPrices() {
+    async function fetchJson(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${url} 요청 실패`);
+      return res.json();
+    }
+
+    async function getPrices() {
+      const [upbitOm, upbitUsdt, bithumb, binanceSpot, binanceFutures] = await Promise.all([
+        fetchJson('https://api.upbit.com/v1/ticker?markets=KRW-OM'),
+        fetchJson('https://api.upbit.com/v1/ticker?markets=KRW-USDT'),
+        fetchJson('https://api.bithumb.com/public/ticker/OM_KRW'),
+        fetchJson('https://api.binance.com/api/v3/ticker/price?symbol=OMUSDT'),
+        fetchJson('https://fapi.binance.com/fapi/v2/ticker/price?symbol=OMUSDT'),
+      ]);
+
+      if (!Array.isArray(upbitOm) || !upbitOm[0]?.trade_price) throw new Error('업비트 KRW-OM 응답 오류');
+      if (!Array.isArray(upbitUsdt) || !upbitUsdt[0]?.trade_price) throw new Error('업비트 KRW-USDT 응답 오류');
+      if (bithumb.status !== '0000') throw new Error('빗썸 응답 오류');
+      if (!binanceSpot.price || !binanceFutures.price) throw new Error('바이낸스 응답 오류');
+
+      return {
+        upbitOmKrw: Number(upbitOm[0].trade_price),
+        usdtKrw: Number(upbitUsdt[0].trade_price),
+        bithumbOmKrw: Number(bithumb.data.closing_price),
+        binanceSpotOmUsdt: Number(binanceSpot.price),
+        binanceFuturesOmUsdt: Number(binanceFutures.price),
+      };
+    }
+
+    async function sendTelegram(text) {
+      const token = document.getElementById('tgToken').value.trim();
+      const chatId = document.getElementById('tgChatId').value.trim();
+      if (!token || !chatId) throw new Error('텔레그램 토큰/Chat ID를 입력하세요.');
+      const url = `https://api.telegram.org/bot${token}/sendMessage`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error('텔레그램 전송 실패');
+    }
+
+    async function tick() {
       try {
-        const res = await fetch('/api/prices');
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.message || '조회 실패');
-        }
-        if (!data.active) {
-          document.getElementById('statusText').textContent = '상태: 중지';
-          return;
-        }
+        const threshold = Number(document.getElementById('threshold').value || 5);
+        const cooldownSec = Number(document.getElementById('cooldown').value || 300);
 
-        const p = data.prices;
-        document.getElementById('pUpbit').textContent = `${num(p.upbit_om_krw)} KRW`;
-        document.getElementById('pBithumb').textContent = `${num(p.bithumb_om_krw)} KRW`;
-        document.getElementById('pBinanceSpotUsdt').textContent = `${num(p.binance_spot_om_usdt, 6)} USDT`;
-        document.getElementById('pBinanceFuturesUsdt').textContent = `${num(p.binance_futures_om_usdt, 6)} USDT`;
-        document.getElementById('pUsdtKrw').textContent = `${num(p.usdt_krw)} KRW`;
-        document.getElementById('pBinanceSpotKrw').textContent = `${num(p.binance_spot_om_krw)} KRW`;
-        document.getElementById('updatedAt').textContent = data.timestamp;
+        const p = await getPrices();
+        const binanceSpotKrw = p.binanceSpotOmUsdt * p.usdtKrw;
+        const spotFuturesGap = diffPercent(p.binanceSpotOmUsdt, p.binanceFuturesOmUsdt);
 
-        updateDiffRow('upbit_bithumb', data.diffs.upbit_bithumb, data.threshold);
-        updateDiffRow('upbit_binance_spot', data.diffs.upbit_binance_spot, data.threshold);
-        updateDiffRow('bithumb_binance_spot', data.diffs.bithumb_binance_spot, data.threshold);
+        document.getElementById('pUpbit').textContent = `${num(p.upbitOmKrw)} KRW`;
+        document.getElementById('pBithumb').textContent = `${num(p.bithumbOmKrw)} KRW`;
+        document.getElementById('pBinanceSpotUsdt').textContent = `${num(p.binanceSpotOmUsdt, 6)} USDT`;
+        document.getElementById('pBinanceFuturesUsdt').textContent = `${num(p.binanceFuturesOmUsdt, 6)} USDT`;
+        document.getElementById('pUsdtKrw').textContent = `${num(p.usdtKrw)} KRW`;
+        document.getElementById('pBinanceSpotKrw').textContent = `${num(binanceSpotKrw)} KRW`;
+        document.getElementById('updatedAt').textContent = new Date().toLocaleString();
+
+        const diffs = {
+          upbit_bithumb: diffPercent(p.upbitOmKrw, p.bithumbOmKrw),
+          upbit_binance_spot: diffPercent(p.upbitOmKrw, binanceSpotKrw),
+          bithumb_binance_spot: diffPercent(p.bithumbOmKrw, binanceSpotKrw),
+        };
+
+        updateDiffRow('upbit_bithumb', diffs.upbit_bithumb, threshold);
+        updateDiffRow('upbit_binance_spot', diffs.upbit_binance_spot, threshold);
+        updateDiffRow('bithumb_binance_spot', diffs.bithumb_binance_spot, threshold);
+
+        const ignoreGap = document.getElementById('ignoreSpotFuturesGap').checked;
+        const suppressAlerts = ignoreGap && spotFuturesGap >= BINANCE_GAP_THRESHOLD;
 
         const gapNotice = document.getElementById('gapNotice');
-        if (data.suppress_alerts) {
+        if (suppressAlerts) {
           gapNotice.style.display = 'block';
-          gapNotice.textContent = `알림 일시 중단: 바이낸스 현물/선물 차이 ${num(data.spot_futures_gap_percent, 2)}% (기준 ${num(data.spot_futures_gap_threshold, 2)}%)`;
+          gapNotice.textContent = `알림 차단중: 바이낸스 현물/선물 차이 ${num(spotFuturesGap, 2)}% (기준 ${num(BINANCE_GAP_THRESHOLD, 2)}%)`;
         } else {
           gapNotice.style.display = 'none';
           gapNotice.textContent = '';
         }
 
-        if (data.errors && data.errors.length) {
-          document.getElementById('errorLog').textContent = data.errors.join('\n');
-        }
+        const triggered = Object.entries(diffs)
+          .filter(([, value]) => value >= threshold)
+          .map(([pair, diff]) => ({ pair, diff }));
 
-        if (!data.suppress_alerts && document.getElementById('webAlertToggle').checked && data.triggered.length > 0) {
-          const cooldownSec = Number(document.getElementById('cooldown').value || 300);
+        // 버그 수정 핵심: suppressAlerts면 웹/텔레그램 알림 둘 다 무조건 차단
+        if (!suppressAlerts && triggered.length > 0) {
+          const msg = triggered.map(x => `${x.pair}: ${num(x.diff, 2)}%`).join(' | ');
           const now = Date.now() / 1000;
-          if (now - lastWebAlertAt >= cooldownSec) {
+
+          if (document.getElementById('webAlertToggle').checked && (now - lastWebAlertAt >= cooldownSec)) {
             lastWebAlertAt = now;
-            const msg = data.triggered.map(x => `${x.pair}: ${num(x.diff, 2)}%`).join(' | ');
             notifyWeb(`임계값 초과! ${msg}`);
+          }
+
+          if (document.getElementById('tgToggle').checked && (now - lastTelegramAlertAt >= cooldownSec)) {
+            lastTelegramAlertAt = now;
+            sendTelegram(`[OM 가격차 알림]\n${msg}`).catch(err => showToast(err.message));
           }
         }
       } catch (err) {
@@ -203,40 +260,22 @@
       }
     }
 
-    async function startMonitoring() {
-      const payload = {
-        threshold: Number(document.getElementById('threshold').value || 5),
-        interval: Number(document.getElementById('interval').value || 5),
-        cooldown: Number(document.getElementById('cooldown').value || 300),
-        telegram_enabled: document.getElementById('tgToggle').checked,
-        telegram_token: document.getElementById('tgToken').value,
-        telegram_chat_id: document.getElementById('tgChatId').value,
-        ignore_when_binance_spot_futures_gap: document.getElementById('ignoreSpotFuturesGap').checked,
-      };
-      const res = await fetch('/api/start', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || '시작 실패');
-
+    function startMonitoring() {
+      const interval = Math.max(3, Number(document.getElementById('interval').value || 5));
       document.getElementById('statusText').textContent = '상태: 실행 중';
       showToast('모니터링 시작');
-      await requestNotificationPermission();
-
+      requestNotificationPermission();
       clearInterval(timer);
-      await fetchPrices();
-      timer = setInterval(fetchPrices, payload.interval * 1000);
+      tick();
+      timer = setInterval(tick, interval * 1000);
     }
 
-    async function stopMonitoring() {
-      const res = await fetch('/api/stop', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || '중지 실패');
+    function stopMonitoring() {
       clearInterval(timer);
       timer = null;
       document.getElementById('statusText').textContent = '상태: 중지';
-      showToast('모니터링 중지');
       document.getElementById('gapNotice').style.display = 'none';
+      showToast('모니터링 중지');
     }
 
     async function testAlert(mode) {
@@ -244,21 +283,12 @@
         notifyWeb('[테스트] 웹 알림 테스트입니다.');
         return;
       }
-      const payload = {
-        mode: 'telegram',
-        telegram_token: document.getElementById('tgToken').value,
-        telegram_chat_id: document.getElementById('tgChatId').value,
-      };
-      const res = await fetch('/api/test_alert', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || '테스트 실패');
-      showToast(data.message);
+      await sendTelegram('[테스트] OM 가격 모니터 텔레그램 알림 테스트');
+      showToast('텔레그램 테스트 전송 완료');
     }
 
-    document.getElementById('startBtn').addEventListener('click', () => startMonitoring().catch(e => showToast(e.message)));
-    document.getElementById('stopBtn').addEventListener('click', () => stopMonitoring().catch(e => showToast(e.message)));
+    document.getElementById('startBtn').addEventListener('click', () => startMonitoring());
+    document.getElementById('stopBtn').addEventListener('click', () => stopMonitoring());
     document.getElementById('webTestBtn').addEventListener('click', () => testAlert('web').catch(e => showToast(e.message)));
     document.getElementById('tgTestBtn').addEventListener('click', () => testAlert('telegram').catch(e => showToast(e.message)));
   </script>
