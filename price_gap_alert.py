@@ -16,13 +16,15 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Iterable, List, Sequence
+from itertools import islice
+from typing import Dict, Iterable, Iterator, List, Sequence
 
 UPBIT_TICKER_URL = "https://api.upbit.com/v1/ticker?markets={markets}"
 UPBIT_MARKETS_URL = "https://api.upbit.com/v1/market/all?isDetails=false"
 BITHUMB_TICKER_URL = "https://api.bithumb.com/public/ticker/ALL_KRW"
 DEFAULT_THRESHOLD = 5.0
 DEFAULT_INTERVAL = 10
+UPBIT_TICKER_BATCH_SIZE = 100  # Upbit ticker endpoint limit
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,15 @@ def fetch_json(url: str, timeout: int = 10) -> dict | list:
         return json.loads(response.read().decode("utf-8"))
 
 
+def chunked(items: Sequence[str], size: int) -> Iterator[List[str]]:
+    iterator = iter(items)
+    while True:
+        batch = list(islice(iterator, size))
+        if not batch:
+            break
+        yield batch
+
+
 def fetch_upbit_markets() -> List[str]:
     data = fetch_json(UPBIT_MARKETS_URL)
     if not isinstance(data, list):
@@ -46,6 +57,8 @@ def fetch_upbit_markets() -> List[str]:
 
     symbols: List[str] = []
     for item in data:
+        if not isinstance(item, dict):
+            continue
         market = item.get("market", "")
         if isinstance(market, str) and market.startswith("KRW-"):
             symbols.append(market.split("-", 1)[1])
@@ -56,18 +69,21 @@ def fetch_upbit_prices(symbols: Sequence[str]) -> Dict[str, float]:
     if not symbols:
         return {}
 
-    markets = ",".join(f"KRW-{symbol}" for symbol in symbols)
-    data = fetch_json(UPBIT_TICKER_URL.format(markets=markets))
-    if not isinstance(data, list):
-        raise RuntimeError("업비트 티커 데이터 형식이 올바르지 않습니다.")
-
     result: Dict[str, float] = {}
-    for item in data:
-        market = item.get("market", "")
-        trade_price = item.get("trade_price")
-        if isinstance(market, str) and market.startswith("KRW-") and isinstance(trade_price, (int, float)):
-            symbol = market.split("-", 1)[1]
-            result[symbol] = float(trade_price)
+    for batch in chunked(symbols, UPBIT_TICKER_BATCH_SIZE):
+        markets = ",".join(f"KRW-{symbol}" for symbol in batch)
+        data = fetch_json(UPBIT_TICKER_URL.format(markets=markets))
+        if not isinstance(data, list):
+            raise RuntimeError("업비트 티커 데이터 형식이 올바르지 않습니다.")
+
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            market = item.get("market", "")
+            trade_price = item.get("trade_price")
+            if isinstance(market, str) and market.startswith("KRW-") and isinstance(trade_price, (int, float)):
+                symbol = market.split("-", 1)[1]
+                result[symbol] = float(trade_price)
     return result
 
 
@@ -147,9 +163,10 @@ def monitor(threshold: float, interval: int, once: bool) -> int:
         print("업비트 KRW 마켓을 찾지 못했습니다.", file=sys.stderr)
         return 1
 
-    print(f"모니터링 시작: 공통 코인 탐색 기준 업비트 KRW 마켓 {len(symbols)}개")
+    print(f"모니터링 시작: 업비트 KRW 마켓 {len(symbols)}개")
     while True:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        had_error = False
         try:
             upbit_prices = fetch_upbit_prices(symbols)
             bithumb_prices = fetch_bithumb_prices()
@@ -161,12 +178,14 @@ def monitor(threshold: float, interval: int, once: bool) -> int:
             else:
                 print(f"[{now}] 이상 없음 (기준 {threshold:.2f}%)")
         except urllib.error.URLError as err:
+            had_error = True
             print(f"[{now}] 네트워크 오류: {err}", file=sys.stderr)
         except Exception as err:  # noqa: BLE001 - 앱 안정성 위해 루프 유지
+            had_error = True
             print(f"[{now}] 처리 오류: {err}", file=sys.stderr)
 
         if once:
-            return 0
+            return 1 if had_error else 0
         time.sleep(interval)
 
 
