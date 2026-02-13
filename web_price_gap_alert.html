@@ -5,23 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>업비트-빗썸 가격차이 웹 모니터</title>
   <style>
-    body{font-family:Arial,sans-serif;max-width:980px;margin:20px auto;padding:0 12px}
-    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    body{font-family:Arial,sans-serif;max-width:1100px;margin:20px auto;padding:0 12px}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
     input,button{padding:8px}
     table{width:100%;border-collapse:collapse;margin-top:12px}
     th,td{border:1px solid #ddd;padding:6px;font-size:13px}
     th{background:#f5f5f5}
-    .warn{color:#b35a00}
+    .warn{color:#b35a00;white-space:pre-wrap}
     .muted{color:#666}
   </style>
 </head>
 <body>
   <h2>업비트-빗썸 가격차이 웹 모니터</h2>
-  <p class="muted">설치 없이 브라우저에서 1회 조회합니다.</p>
+  <p class="muted">설치 없이 브라우저에서 자동 탐색 + 텔레그램 알림</p>
 
   <div class="row">
     <label>기준(%): <input id="threshold" type="number" value="5" step="0.1" /></label>
-    <button id="runBtn">조회</button>
+    <label>간격(초): <input id="interval" type="number" value="10" min="1" /></label>
+    <button id="runBtn">지금 1회 조회</button>
+    <button id="startBtn">자동 시작</button>
+    <button id="stopBtn" disabled>자동 중지</button>
+  </div>
+
+  <div class="row">
+    <label>텔레그램 봇 토큰: <input id="tgToken" type="text" size="34" placeholder="123456:ABC..." /></label>
+    <label>텔레그램 챗 ID: <input id="tgChatId" type="text" size="18" placeholder="예: 123456789" /></label>
+    <button id="testTelegramBtn">텔레그램 테스트</button>
   </div>
 
   <p id="status"></p>
@@ -32,7 +41,7 @@
 
   <h3>알림 대상 결과</h3>
   <table>
-    <thead><tr><th>코인</th><th>갭%</th><th>업비트</th><th>빗썸</th></tr></thead>
+    <thead><tr><th>코인</th><th>갭%</th><th>업비트</th><th>빗썸</th><th>업비트 입/출금</th><th>빗썸 입/출금</th></tr></thead>
     <tbody id="resultBody"></tbody>
   </table>
 
@@ -43,10 +52,18 @@ const upbitWalletUrl='https://api.upbit.com/v1/status/wallet';
 const bithumbTickerUrl='https://api.bithumb.com/public/ticker/ALL_KRW';
 const bithumbAssetUrl='https://api.bithumb.com/public/assetsstatus/ALL';
 
+let timerId = null;
+let isRunning = false;
+
 const boolFlag=(v)=>['1','true','y','yes','working','normal','available'].includes(String(v).toLowerCase().trim());
 const chunk=(arr,size)=>{const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out;};
+const statusText=(x)=>!x ? '확인불가/확인불가' : `${x.d?'가능':'불가'}/${x.w?'가능':'불가'}`;
 
-async function jfetch(url){const r=await fetch(url); if(!r.ok) throw new Error(`HTTP ${r.status}`); return r.json();}
+async function jfetch(url){
+  const r=await fetch(url);
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
 
 async function fetchUpbitSymbols(){
   const data=await jfetch(upbitMarketsUrl);
@@ -118,9 +135,31 @@ function filterCoins(common,up,bi){
   return {tradable,restricted};
 }
 
-function statusText(x){return `${x.d?'입금가능':'입금불가'}/${x.w?'출금가능':'출금불가'}`}
+async function sendTelegramMessage(text){
+  const token=document.getElementById('tgToken').value.trim();
+  const chatId=document.getElementById('tgChatId').value.trim();
+  if(!token || !chatId){
+    return {ok:false, message:'텔레그램 토큰/챗ID를 입력해 주세요.'};
+  }
+  const url=`https://api.telegram.org/bot${token}/sendMessage`;
+  try{
+    const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId,text})});
+    const data=await res.json();
+    if(!res.ok || !data.ok){
+      return {ok:false, message:`텔레그램 전송 실패: ${data.description || res.status}`};
+    }
+    return {ok:true, message:'텔레그램 전송 성공'};
+  }catch(e){
+    return {ok:false, message:`텔레그램 전송 오류: ${e.message}`};
+  }
+}
 
 async function run(){
+  if(isRunning){
+    return;
+  }
+  isRunning = true;
+  const now = new Date().toLocaleString();
   const t=Number(document.getElementById('threshold').value||5);
   const status=document.getElementById('status');
   const warningsEl=document.getElementById('warnings');
@@ -148,23 +187,66 @@ async function run(){
       const u=upPrices[s], b=biPrices[s];
       if(!b||b<=0) continue;
       const gap=Math.abs(u-b)/b*100;
-      if(gap>=t) rows.push({s,gap,u,b});
+      if(gap>=t) rows.push({s,gap,u,b,upStatus:statuses.up?.[s]||null,biStatus:statuses.bi?.[s]||null});
     }
     rows.sort((a,b)=>b.gap-a.gap);
 
     for(const r of rows){
       const tr=document.createElement('tr');
-      tr.innerHTML=`<td>${r.s}</td><td>${r.gap.toFixed(2)}%</td><td>${r.u.toLocaleString()}</td><td>${r.b.toLocaleString()}</td>`;
+      tr.innerHTML=`<td>${r.s}</td><td>${r.gap.toFixed(2)}%</td><td>${r.u.toLocaleString()}</td><td>${r.b.toLocaleString()}</td><td>${statusText(r.upStatus)}</td><td>${statusText(r.biStatus)}</td>`;
       body.appendChild(tr);
     }
+
+    if(rows.length>0){
+      const message = `[가격차이 알림] ${now}\n기준 ${t}% 이상 ${rows.length}개\n` + rows.slice(0,10).map(r=>`${r.s} ${r.gap.toFixed(2)}% (업:${r.u}, 빗:${r.b})`).join('\n');
+      const tg = await sendTelegramMessage(message);
+      if(!tg.ok){
+        warningsEl.textContent = (warningsEl.textContent ? warningsEl.textContent + ' | ' : '') + tg.message;
+      }
+    }
+
+    if(rows.length>0){
+      try{ alert(`가격차이 ${rows.length}개 감지`); } catch(_){}
+    }
+
     status.textContent=`완료: 공통 ${common.length}개 / 알림대상 ${tradable.length}개 / 기준초과 ${rows.length}개`;
   }catch(e){
     status.textContent='실패';
     warningsEl.textContent=String(e);
+  } finally {
+    isRunning = false;
   }
 }
 
+function startAuto(){
+  const intervalSec = Number(document.getElementById('interval').value || 10);
+  if(intervalSec <= 0){
+    document.getElementById('warnings').textContent = '간격(초)은 1 이상이어야 합니다.';
+    return;
+  }
+  if(timerId){ clearInterval(timerId); }
+  timerId = setInterval(run, intervalSec * 1000);
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+  run();
+}
+
+function stopAuto(){
+  if(timerId){ clearInterval(timerId); timerId = null; }
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+}
+
+async function testTelegram(){
+  const now = new Date().toLocaleString();
+  const result = await sendTelegramMessage(`[테스트] 텔레그램 알림 테스트 성공 ${now}`);
+  document.getElementById('warnings').textContent = result.message;
+}
+
 document.getElementById('runBtn').addEventListener('click',run);
+document.getElementById('startBtn').addEventListener('click',startAuto);
+document.getElementById('stopBtn').addEventListener('click',stopAuto);
+document.getElementById('testTelegramBtn').addEventListener('click',testTelegram);
 </script>
 </body>
 </html>

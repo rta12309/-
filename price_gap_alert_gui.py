@@ -119,6 +119,9 @@ class PriceGapAlertGUI:
 
         if alerts:
             rendered = f"\n[{now}]\n" + core.render_alerts(alerts, threshold)
+            status_lines = core.render_alert_statuses(alerts, upbit_statuses, bithumb_statuses)
+            if status_lines:
+                rendered += "\n" + status_lines
             self.log_queue.put(("alert", rendered))
         else:
             self.log_queue.put(("log", f"[{now}] 이상 없음 (기준 {threshold:.2f}%)"))

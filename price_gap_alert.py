@@ -260,6 +260,41 @@ def status_text(status: TransferStatus) -> str:
     return f"{deposit}/{withdraw}"
 
 
+def status_value_text(value: Optional[bool]) -> str:
+    if value is None:
+        return "확인불가"
+    return "가능" if value else "불가"
+
+
+def symbol_status_line(
+    symbol: str,
+    upbit_statuses: Optional[Dict[str, TransferStatus]],
+    bithumb_statuses: Optional[Dict[str, TransferStatus]],
+) -> str:
+    up = upbit_statuses.get(symbol) if upbit_statuses else None
+    bi = bithumb_statuses.get(symbol) if bithumb_statuses else None
+
+    up_deposit = status_value_text(None if up is None else up.deposit_enabled)
+    up_withdraw = status_value_text(None if up is None else up.withdraw_enabled)
+    bi_deposit = status_value_text(None if bi is None else bi.deposit_enabled)
+    bi_withdraw = status_value_text(None if bi is None else bi.withdraw_enabled)
+
+    return (
+        f"상태 | {symbol:<10} | 업비트 입금:{up_deposit}/출금:{up_withdraw} "
+        f"| 빗썸 입금:{bi_deposit}/출금:{bi_withdraw}"
+    )
+
+
+def render_alert_statuses(
+    alerts: Sequence[GapAlert],
+    upbit_statuses: Optional[Dict[str, TransferStatus]],
+    bithumb_statuses: Optional[Dict[str, TransferStatus]],
+) -> str:
+    if not alerts:
+        return ""
+    return "\n".join(symbol_status_line(a.symbol, upbit_statuses, bithumb_statuses) for a in alerts)
+
+
 def render_alerts(alerts: Iterable[GapAlert], threshold: float) -> str:
     lines = [f"⚠️  {threshold:.2f}% 이상 가격 차이 감지"]
     for alert in alerts:
@@ -326,6 +361,7 @@ def monitor(threshold: float, interval: int, once: bool) -> int:
             if alerts:
                 beep()
                 print(render_alerts(alerts, threshold))
+                print(render_alert_statuses(alerts, upbit_statuses, bithumb_statuses))
             else:
                 print(f"[{now}] 이상 없음 (기준 {threshold:.2f}%)")
         except urllib.error.URLError as err:
