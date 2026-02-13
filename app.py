@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib import error, parse, request
+from urllib import parse, request
 
 HOST = "127.0.0.1"
 PORT = 8000
@@ -17,17 +17,18 @@ STATE = {
     "telegram_enabled": False,
     "telegram_token": "",
     "telegram_chat_id": "",
-    "ignore_when_binance_lower": False,
+    "ignore_when_binance_spot_futures_gap": False,
     "last_alert_time": 0.0,
 }
 STATE_LOCK = threading.Lock()
 
 DEFAULT_TIMEOUT = 5
 MAX_RETRY = 2
+BINANCE_GAP_THRESHOLD = 2.0  # 요청사항: 바이낸스 선물-현물 차이 2% 이상이면 알림 비활성화
 
 
 def request_json(url: str, params=None, method="GET", payload=None):
-    """표준 라이브러리 기반 HTTP 요청 + 간단 재시도."""
+    """표준 라이브러리 기반 HTTP 요청 + 가벼운 재시도."""
     last_exc = None
     full_url = url
     if params:
@@ -60,6 +61,11 @@ def get_bithumb_om_price() -> float:
     if data.get("status") != "0000":
         raise RuntimeError(f"Bithumb 오류: {data}")
     return float(data["data"]["closing_price"])
+
+
+def get_binance_spot_omusdt() -> float:
+    data = request_json("https://api.binance.com/api/v3/ticker/price", params={"symbol": "OMUSDT"})
+    return float(data["price"])
 
 
 def get_binance_futures_omusdt() -> float:
@@ -126,7 +132,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 STATE["telegram_enabled"] = bool(payload.get("telegram_enabled", False))
                 STATE["telegram_token"] = str(payload.get("telegram_token", "")).strip()
                 STATE["telegram_chat_id"] = str(payload.get("telegram_chat_id", "")).strip()
-                STATE["ignore_when_binance_lower"] = bool(payload.get("ignore_when_binance_lower", False))
+                STATE["ignore_when_binance_spot_futures_gap"] = bool(
+                    payload.get("ignore_when_binance_spot_futures_gap", False)
+                )
             return self._send_json({"ok": True, "message": "모니터링 시작"})
 
         if self.path == "/api/stop":
@@ -158,12 +166,13 @@ class AppHandler(BaseHTTPRequestHandler):
             return self._send_json({"active": False, "message": "중지 상태입니다. [시작] 버튼을 눌러주세요."})
 
         errors_list = []
-        upbit_om = bithumb_om = binance_om_usdt = usdt_krw = None
+        upbit_om = bithumb_om = binance_spot_om_usdt = binance_futures_om_usdt = usdt_krw = None
 
         for fn, name in [
             (lambda: get_upbit_price("KRW-OM"), "upbit_om"),
             (get_bithumb_om_price, "bithumb_om"),
-            (get_binance_futures_omusdt, "binance_om_usdt"),
+            (get_binance_spot_omusdt, "binance_spot_om_usdt"),
+            (get_binance_futures_omusdt, "binance_futures_om_usdt"),
             (lambda: get_upbit_price("KRW-USDT"), "usdt_krw"),
         ]:
             try:
@@ -172,35 +181,37 @@ class AppHandler(BaseHTTPRequestHandler):
                     upbit_om = val
                 elif name == "bithumb_om":
                     bithumb_om = val
-                elif name == "binance_om_usdt":
-                    binance_om_usdt = val
+                elif name == "binance_spot_om_usdt":
+                    binance_spot_om_usdt = val
+                elif name == "binance_futures_om_usdt":
+                    binance_futures_om_usdt = val
                 else:
                     usdt_krw = val
             except Exception as exc:
                 errors_list.append(f"{name} 실패: {exc}")
 
-        if None in (upbit_om, bithumb_om, binance_om_usdt, usdt_krw):
-            return self._send_json({"active": True, "errors": errors_list, "message": "일부 가격을 가져오지 못했습니다."}, status=502)
+        if None in (upbit_om, bithumb_om, binance_spot_om_usdt, binance_futures_om_usdt, usdt_krw):
+            return self._send_json(
+                {"active": True, "errors": errors_list, "message": "일부 가격을 가져오지 못했습니다."}, status=502
+            )
 
-        binance_om_krw = binance_om_usdt * usdt_krw
+        binance_spot_om_krw = binance_spot_om_usdt * usdt_krw
+        spot_futures_gap_percent = diff_percent(binance_spot_om_usdt, binance_futures_om_usdt)
+
         diffs = {
             "upbit_bithumb": diff_percent(upbit_om, bithumb_om),
-            "upbit_binance": diff_percent(upbit_om, binance_om_krw),
-            "bithumb_binance": diff_percent(bithumb_om, binance_om_krw),
+            "upbit_binance_spot": diff_percent(upbit_om, binance_spot_om_krw),
+            "bithumb_binance_spot": diff_percent(bithumb_om, binance_spot_om_krw),
         }
+
+        suppress_alerts = (
+            state.get("ignore_when_binance_spot_futures_gap", False)
+            and spot_futures_gap_percent >= BINANCE_GAP_THRESHOLD
+        )
+
         triggered = []
-        for pair_name, diff_value in diffs.items():
-            if diff_value < state["threshold"]:
-                continue
-
-            # 옵션 ON이면, 바이낸스 환산가가 더 낮은 케이스는 알림에서 제외
-            if state.get("ignore_when_binance_lower", False):
-                if pair_name == "upbit_binance" and binance_om_krw < upbit_om:
-                    continue
-                if pair_name == "bithumb_binance" and binance_om_krw < bithumb_om:
-                    continue
-
-            triggered.append({"pair": pair_name, "diff": diff_value})
+        if not suppress_alerts:
+            triggered = [{"pair": k, "diff": v} for k, v in diffs.items() if v >= state["threshold"]]
 
         telegram_sent = False
         if triggered and state["telegram_enabled"] and state["telegram_token"] and state["telegram_chat_id"]:
@@ -211,8 +222,17 @@ class AppHandler(BaseHTTPRequestHandler):
                     STATE["last_alert_time"] = now
             if cooldown_ok:
                 try:
-                    msg = "[OM 가격차 알림]\n" + "\n".join(f"{x['pair']}: {x['diff']:.2f}%" for x in triggered)
-                    send_telegram_message(state["telegram_token"], state["telegram_chat_id"], msg)
+                    msg_lines = [
+                        "[OM 가격차 알림]",
+                        f"업비트 KRW-OM: {upbit_om:,.2f} KRW",
+                        f"빗썸 OM_KRW: {bithumb_om:,.2f} KRW",
+                        f"바이낸스 현물 OMUSDT: {binance_spot_om_usdt:,.6f} USDT",
+                        f"바이낸스 선물 OMUSDT: {binance_futures_om_usdt:,.6f} USDT",
+                        f"현물-선물 차이: {spot_futures_gap_percent:.2f}%",
+                        "----",
+                    ]
+                    msg_lines.extend(f"{x['pair']}: {x['diff']:.2f}%" for x in triggered)
+                    send_telegram_message(state["telegram_token"], state["telegram_chat_id"], "\n".join(msg_lines))
                     telegram_sent = True
                 except Exception as exc:
                     errors_list.append(f"텔레그램 전송 실패: {exc}")
@@ -224,15 +244,19 @@ class AppHandler(BaseHTTPRequestHandler):
                 "prices": {
                     "upbit_om_krw": upbit_om,
                     "bithumb_om_krw": bithumb_om,
-                    "binance_om_usdt": binance_om_usdt,
+                    "binance_spot_om_usdt": binance_spot_om_usdt,
+                    "binance_futures_om_usdt": binance_futures_om_usdt,
                     "usdt_krw": usdt_krw,
-                    "binance_om_krw": binance_om_krw,
+                    "binance_spot_om_krw": binance_spot_om_krw,
                 },
                 "diffs": diffs,
                 "threshold": state["threshold"],
                 "triggered": triggered,
                 "telegram_sent": telegram_sent,
                 "errors": errors_list,
+                "spot_futures_gap_percent": spot_futures_gap_percent,
+                "spot_futures_gap_threshold": BINANCE_GAP_THRESHOLD,
+                "suppress_alerts": suppress_alerts,
             }
         )
 
