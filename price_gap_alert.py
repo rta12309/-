@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -22,12 +23,9 @@ from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 UPBIT_TICKER_URL = "https://api.upbit.com/v1/ticker?markets={markets}"
 UPBIT_MARKETS_URL = "https://api.upbit.com/v1/market/all?isDetails=false"
-UPBIT_WALLET_STATUS_URLS = (
-    "https://api.upbit.com/v1/status/wallet",
-    "https://sg-api.upbit.com/v1/status/wallet",
-    "https://id-api.upbit.com/v1/status/wallet",
-    "https://th-api.upbit.com/v1/status/wallet",
-    "https://global-api.upbit.com/v1/status/wallet",
+UPBIT_NOTICE_URLS = (
+    "https://api-manager.upbit.com/api/v1/notices?page=1&per_page=100",
+    "https://api-manager.upbit.com/api/v1/notices?page=1&per_page=100&thread_name=notice",
 )
 BITHUMB_TICKER_URL = "https://api.bithumb.com/public/ticker/ALL_KRW"
 BITHUMB_ASSET_STATUS_URL = "https://api.bithumb.com/public/assetsstatus/ALL"
@@ -60,6 +58,12 @@ def fetch_json(url: str, timeout: int = 10) -> dict | list:
     req = urllib.request.Request(url, headers={"User-Agent": "price-gap-alert/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_text(url: str, timeout: int = 10) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": "price-gap-alert/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return response.read().decode("utf-8", errors="ignore")
 
 
 def chunked(items: Sequence[str], size: int) -> Iterator[List[str]]:
@@ -134,64 +138,93 @@ def to_bool_flag(value: object) -> bool:
     return text in {"1", "true", "y", "yes", "working", "normal", "available"}
 
 
-def _to_upbit_flag(value: object, *, wallet: bool) -> bool:
-    text = str(value).strip().lower()
-    if wallet:
-        return text in {"working", "normal", "available", "true", "1"}
-    return text in {"normal", "working", "available", "true", "1"}
+def _notice_mentions_symbol(text: str, symbol: str) -> bool:
+    pattern = rf"(^|[^A-Z0-9]){re.escape(symbol)}([^A-Z0-9]|$)"
+    return bool(re.search(pattern, text.upper()))
 
 
-def _parse_upbit_statuses(data: object) -> Dict[str, TransferStatus]:
-    if not isinstance(data, list):
-        return {}
+def _status_from_notice_texts(symbol: str, notice_texts: Sequence[str]) -> Optional[TransferStatus]:
+    deposit_enabled: Optional[bool] = None
+    withdraw_enabled: Optional[bool] = None
 
-    statuses: Dict[str, TransferStatus] = {}
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        symbol = item.get("currency") or item.get("currency_symbol") or item.get("code")
-        if not isinstance(symbol, str) or not symbol.strip():
+    for raw in notice_texts:
+        text = raw.upper()
+        if not _notice_mentions_symbol(text, symbol):
             continue
 
-        wallet_raw = item.get("wallet_state", item.get("deposit_status", item.get("deposit_state", item.get("deposit", ""))))
-        block_raw = item.get("block_state", item.get("withdraw_status", item.get("withdraw_state", item.get("withdrawal", ""))))
+        if "입출금" in text and "중단" in text:
+            deposit_enabled = False
+            withdraw_enabled = False
+            break
+        if "입금" in text and "중단" in text:
+            deposit_enabled = False
+        if "출금" in text and "중단" in text:
+            withdraw_enabled = False
 
-        statuses[symbol.upper()] = TransferStatus(
-            deposit_enabled=_to_upbit_flag(wallet_raw, wallet=True),
-            withdraw_enabled=_to_upbit_flag(block_raw, wallet=False),
-        )
-    return statuses
+        if "입출금" in text and ("재개" in text or "정상화" in text):
+            deposit_enabled = True
+            withdraw_enabled = True
+            break
+        if "입금" in text and ("재개" in text or "정상화" in text):
+            deposit_enabled = True
+        if "출금" in text and ("재개" in text or "정상화" in text):
+            withdraw_enabled = True
+
+    if deposit_enabled is None and withdraw_enabled is None:
+        return None
+
+    return TransferStatus(
+        deposit_enabled=True if deposit_enabled is None else deposit_enabled,
+        withdraw_enabled=True if withdraw_enabled is None else withdraw_enabled,
+    )
 
 
-def fetch_upbit_transfer_statuses() -> Dict[str, TransferStatus]:
+def _extract_notice_texts(payload: object) -> List[str]:
+    texts: List[str] = []
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            title = item.get("title", "")
+            body = item.get("body", "")
+            summary = item.get("summary", "")
+            texts.append(f"{title} {body} {summary}")
+    return texts
+
+
+def fetch_upbit_transfer_statuses(symbols: Sequence[str]) -> Dict[str, TransferStatus]:
+    notice_texts: List[str] = []
     errors: List[str] = []
 
-    for url in UPBIT_WALLET_STATUS_URLS:
+    for url in UPBIT_NOTICE_URLS:
         try:
-            req = urllib.request.Request(
-                url,
-                headers={
-                    "User-Agent": "Mozilla/5.0 price-gap-alert/1.0",
-                    "Accept": "application/json",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=10) as response:
-                data = json.loads(response.read().decode("utf-8"))
+            payload = fetch_json(url)
+            extracted = _extract_notice_texts(payload)
+            if extracted:
+                notice_texts = extracted
+                break
         except Exception as err:  # noqa: BLE001
             errors.append(f"{url}: {err}")
-            continue
 
-        if isinstance(data, dict) and data.get("error"):
-            errors.append(f"{url}: {data.get('error')}")
-            continue
+    if not notice_texts:
+        # HTML fallback
+        for url in ("https://upbit.com/service_center/notice",):
+            try:
+                notice_texts = [fetch_text(url)]
+                break
+            except Exception as err:  # noqa: BLE001
+                errors.append(f"{url}: {err}")
 
-        statuses = _parse_upbit_statuses(data)
-        if statuses:
-            return statuses
+    if not notice_texts:
+        raise RuntimeError("업비트 공지 파싱 실패: " + " | ".join(errors))
 
-        errors.append(f"{url}: 업비트 입출금 상태 응답이 비어 있거나 형식이 다릅니다.")
+    statuses: Dict[str, TransferStatus] = {}
+    for symbol in symbols:
+        matched = _status_from_notice_texts(symbol.upper(), notice_texts)
+        if matched is not None:
+            statuses[symbol.upper()] = matched
 
-    raise RuntimeError("업비트 입출금 상태 조회에 실패했습니다. " + " | ".join(errors))
+    return statuses
 
 
 def fetch_bithumb_transfer_statuses() -> Dict[str, TransferStatus]:
@@ -220,13 +253,13 @@ def fetch_bithumb_transfer_statuses() -> Dict[str, TransferStatus]:
 
 
 
-def fetch_transfer_statuses_safe() -> Tuple[Optional[Dict[str, TransferStatus]], Optional[Dict[str, TransferStatus]], List[str]]:
+def fetch_transfer_statuses_safe(symbols: Sequence[str]) -> Tuple[Optional[Dict[str, TransferStatus]], Optional[Dict[str, TransferStatus]], List[str]]:
     warnings: List[str] = []
     upbit_statuses: Optional[Dict[str, TransferStatus]] = None
     bithumb_statuses: Optional[Dict[str, TransferStatus]] = None
 
     try:
-        upbit_statuses = fetch_upbit_transfer_statuses()
+        upbit_statuses = fetch_upbit_transfer_statuses(symbols)
     except Exception as err:  # noqa: BLE001
         warnings.append(f"업비트 입출금 상태 조회 실패: {err}")
 
@@ -247,7 +280,7 @@ def fetch_transfer_statuses_with_fallback(
     Dict[str, str],
     Dict[str, str],
 ]:
-    upbit_statuses, bithumb_statuses, warnings = fetch_transfer_statuses_safe()
+    upbit_statuses, bithumb_statuses, warnings = fetch_transfer_statuses_safe(symbols)
     upbit_sources = {symbol: "공식API" for symbol in (upbit_statuses or {})}
     bithumb_sources = {symbol: "공식API" for symbol in (bithumb_statuses or {})}
     return upbit_statuses, bithumb_statuses, warnings, upbit_sources, bithumb_sources

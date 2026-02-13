@@ -52,12 +52,9 @@
 <script>
 const upbitMarketsUrl='https://api.upbit.com/v1/market/all?isDetails=false';
 const upbitTickerUrl=(markets)=>`https://api.upbit.com/v1/ticker?markets=${markets}`;
-const upbitWalletUrls=[
-  'https://api.upbit.com/v1/status/wallet',
-  'https://sg-api.upbit.com/v1/status/wallet',
-  'https://id-api.upbit.com/v1/status/wallet',
-  'https://th-api.upbit.com/v1/status/wallet',
-  'https://global-api.upbit.com/v1/status/wallet'
+const upbitNoticeUrls=[
+  "https://api-manager.upbit.com/api/v1/notices?page=1&per_page=100",
+  "https://api-manager.upbit.com/api/v1/notices?page=1&per_page=100&thread_name=notice"
 ];
 const bithumbTickerUrl='https://api.bithumb.com/public/ticker/ALL_KRW';
 const bithumbAssetUrl='https://api.bithumb.com/public/assetsstatus/ALL';
@@ -108,49 +105,51 @@ async function fetchBithumbPrices(){
 
 async function fetchStatusesSafe(common){
   const warnings=[];
-  let up=null, bi=null;
+  let up={};
+  let bi=null;
   const upSrc={};
   const biSrc={};
 
-  const toUpbitFlag=(v)=>['working','normal','available','true','1'].includes(String(v).toLowerCase().trim());
-  const parseUpbit=(data)=>{
-    if(!Array.isArray(data)) return {};
-    const out={};
-    for(const it of data){
-      if(typeof it!=='object') continue;
-      const sym=(it.currency || it.currency_symbol || it.code || '').toUpperCase();
-      if(!sym) continue;
-      const dRaw = it.wallet_state ?? it.deposit_status ?? it.deposit_state ?? it.deposit ?? '';
-      const wRaw = it.block_state ?? it.withdraw_status ?? it.withdraw_state ?? it.withdrawal ?? '';
-      out[sym]={d:toUpbitFlag(dRaw), w:toUpbitFlag(wRaw)};
-    }
-    return out;
-  };
+  function statusFromNoticeTexts(symbol, texts){
+    let d=null, w=null;
+    const sym=String(symbol||'').toUpperCase();
 
-  {
-    let ok=false;
-    for(const url of upbitWalletUrls){
-      try{
-        const r=await fetch(url, {headers:{'Accept':'application/json','User-Agent':'Mozilla/5.0 price-gap-alert/1.0'}});
-        if(!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data=await r.json();
-        if(data && data.error){
-          throw new Error(JSON.stringify(data.error));
-        }
-        const parsed=parseUpbit(data);
-        if(Object.keys(parsed).length){
-          up=parsed;
-          for(const sym of Object.keys(up)) upSrc[sym]='공식API';
-          ok=true;
-          break;
-        }
-        throw new Error('응답이 비어 있거나 형식이 다름');
-      }catch(e){
-        warnings.push(`업비트 입출금 상태 조회 실패(${url}): ${e.message}`);
-      }
+    for(const raw of texts){
+      const t=String(raw||'').toUpperCase();
+      const mention=new RegExp(`${sym}`).test(t);
+      if(!mention) continue;
+
+      if(t.includes('입출금') && t.includes('중단')){ d=false; w=false; break; }
+      if(t.includes('입금') && t.includes('중단')) d=false;
+      if(t.includes('출금') && t.includes('중단')) w=false;
+
+      if(t.includes('입출금') && (t.includes('재개') || t.includes('정상화'))){ d=true; w=true; break; }
+      if(t.includes('입금') && (t.includes('재개') || t.includes('정상화')) ) d=true;
+      if(t.includes('출금') && (t.includes('재개') || t.includes('정상화')) ) w=true;
     }
-    if(!ok){
-      warnings.push('업비트 입출금 상태 조회에 모두 실패했습니다.');
+
+    if(d===null && w===null) return null;
+    return {d:d===null?true:d, w:w===null?true:w};
+  }
+
+  let noticeTexts=[];
+  for(const url of upbitNoticeUrls){
+    try{
+      const data=await jfetch(url);
+      if(Array.isArray(data)){
+        noticeTexts=data.map(it=>`${it?.title||''} ${it?.body||''} ${it?.summary||''}`);
+        if(noticeTexts.length) break;
+      }
+    }catch(e){
+      warnings.push(`업비트 공지 파싱 실패(${url}): ${e.message}`);
+    }
+  }
+
+  for(const sym of common){
+    const st=statusFromNoticeTexts(sym, noticeTexts);
+    if(st){
+      up[sym]=st;
+      upSrc[sym]='업비트공지';
     }
   }
 
@@ -168,6 +167,11 @@ async function fetchStatusesSafe(common){
       biSrc[upper]='공식API';
     }
   }catch(e){warnings.push(`빗썸 입출금 상태 조회 실패: ${e.message}`);}
+
+  if(Object.keys(up).length===0){
+    up=null;
+    warnings.push('업비트 공지에서 입출금 상태를 찾지 못했습니다.');
+  }
 
   return {up,bi,warnings,upSrc,biSrc};
 }
