@@ -100,7 +100,19 @@ class PriceGapAlertGUI:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         upbit_prices = core.fetch_upbit_prices(symbols)
         bithumb_prices = core.fetch_bithumb_prices()
-        alerts = core.find_gap_alerts(upbit_prices, bithumb_prices, threshold)
+        upbit_statuses = core.fetch_upbit_transfer_statuses()
+        bithumb_statuses = core.fetch_bithumb_transfer_statuses()
+
+        common_symbols = sorted(set(upbit_prices) & set(bithumb_prices))
+        tradable_symbols, restricted = core.filter_restricted_coins(common_symbols, upbit_statuses, bithumb_statuses)
+        filtered_upbit = {s: upbit_prices[s] for s in tradable_symbols if s in upbit_prices}
+        filtered_bithumb = {s: bithumb_prices[s] for s in tradable_symbols if s in bithumb_prices}
+        alerts = core.find_gap_alerts(filtered_upbit, filtered_bithumb, threshold)
+
+        self.log_queue.put(("log", f"[{now}] 공통코인 {len(common_symbols)}개 / 알림대상 {len(tradable_symbols)}개"))
+        restricted_msg = core.render_restricted_coins(restricted)
+        if restricted_msg:
+            self.log_queue.put(("log", restricted_msg))
 
         if alerts:
             rendered = f"\n[{now}]\n" + core.render_alerts(alerts, threshold)
