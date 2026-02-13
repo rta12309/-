@@ -68,3 +68,43 @@ python3 price_gap_alert.py --threshold 7.5 --once
 - 업비트/빗썸 입출금 상태 API가 401/차단될 경우, 해당 경고를 표시하고 **가격 차이 계산은 계속 진행**합니다.
 - 조회 중에는 로딩 아이콘(회전 스피너)로 앱이 멈춘 것이 아닌지 바로 확인할 수 있습니다.
 - GitHub Pages에 이 파일을 올리면 웹 링크로 바로 실행할 수 있습니다.
+
+## CORS 해결용 업비트 프록시 서버 (Flask)
+
+브라우저에서 업비트 `https://api.upbit.com/v1/status/wallet`를 직접 호출하면 CORS로 막힐 수 있습니다.
+아래 구조로 해결합니다.
+
+- 프론트 → `GET /api/upbit_wallet_status` (내 서버)
+- 내 서버 → 업비트 API 호출
+- 내 서버가 결과 JSON만 프론트에 전달
+
+### 파일
+
+- `app.py`: Flask 서버 + CORS 설정 + 업비트 프록시 API
+- `upbit_wallet_status_client.html`: 버튼 클릭으로 상태 조회하는 간단 프론트
+
+### 실행 방법
+
+1. Flask 설치
+
+```bash
+python3 -m pip install flask
+```
+
+2. 서버 실행
+
+```bash
+python3 app.py
+```
+
+3. 브라우저에서 열기
+
+- `http://localhost:8000/`
+
+### 서버 API
+
+- `GET /api/upbit_wallet_status`
+  - 성공: `{ "source": "upbit", "count": ..., "data": [...] }`
+  - 실패: `{ "error": "..." }`
+
+`app.py`는 CORS 헤더(`Access-Control-Allow-Origin: *`)를 명시적으로 설정합니다.

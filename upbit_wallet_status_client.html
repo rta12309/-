@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>업비트 입출금 상태 조회</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 980px; margin: 24px auto; padding: 0 12px; }
+    button { padding: 10px 14px; cursor: pointer; }
+    .status { margin-top: 12px; color: #333; }
+    .error { color: #c62828; white-space: pre-wrap; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #ddd; padding: 8px; font-size: 13px; }
+    th { background: #f5f5f5; }
+  </style>
+</head>
+<body>
+  <h2>업비트 입출금 상태 조회 (CORS 우회)</h2>
+  <p>브라우저는 업비트를 직접 호출하지 않고, <code>/api/upbit_wallet_status</code>만 호출합니다.</p>
+
+  <button id="loadBtn">업비트 입출금 상태 조회</button>
+  <p id="status" class="status">대기 중</p>
+  <p id="error" class="error"></p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>코인</th>
+        <th>wallet_state(입금)</th>
+        <th>block_state(출금)</th>
+      </tr>
+    </thead>
+    <tbody id="resultBody"></tbody>
+  </table>
+
+  <script>
+    const loadBtn = document.getElementById('loadBtn');
+    const statusEl = document.getElementById('status');
+    const errorEl = document.getElementById('error');
+    const resultBody = document.getElementById('resultBody');
+
+    async function loadWalletStatus() {
+      statusEl.textContent = '조회 중...';
+      errorEl.textContent = '';
+      resultBody.innerHTML = '';
+
+      try {
+        // 업비트 직접 호출 금지: 우리 서버 엔드포인트만 호출
+        const res = await fetch('/api/upbit_wallet_status');
+        const data = await res.json();
+
+        if (!res.ok || data.error) {
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+
+        const rows = Array.isArray(data.data) ? data.data : [];
+        for (const item of rows) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${item.currency ?? '-'}</td>
+            <td>${item.wallet_state ?? '-'}</td>
+            <td>${item.block_state ?? '-'}</td>
+          `;
+          resultBody.appendChild(tr);
+        }
+
+        statusEl.textContent = `완료: ${rows.length}개 코인 상태`;
+      } catch (err) {
+        statusEl.textContent = '실패';
+        errorEl.textContent = `오류: ${err.message}`;
+      }
+    }
+
+    loadBtn.addEventListener('click', loadWalletStatus);
+  </script>
+</body>
+</html>
