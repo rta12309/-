@@ -71,40 +71,63 @@ python3 price_gap_alert.py --threshold 7.5 --once
 
 ## CORS 해결용 업비트 프록시 서버 (Flask)
 
-브라우저에서 업비트 `https://api.upbit.com/v1/status/wallet`를 직접 호출하면 CORS로 막힐 수 있습니다.
+브라우저에서 업비트 `https://api.upbit.com/v1/status/wallet`를 직접 호출하면 CORS 문제로 `Failed to fetch`가 날 수 있습니다.
 아래 구조로 해결합니다.
 
-- 프론트 → `GET /api/upbit_wallet_status` (내 서버)
+- 프론트 → `GET /api/upbit_wallet_status` (내 서버만 호출)
 - 내 서버 → 업비트 API 호출
-- 내 서버가 결과 JSON만 프론트에 전달
+- 내 서버가 JSON 결과만 프론트에 전달
 
 ### 파일
 
-- `app.py`: Flask 서버 + CORS 설정 + 업비트 프록시 API
-- `upbit_wallet_status_client.html`: 버튼 클릭으로 상태 조회하는 간단 프론트
+- `app.py`: Flask 프록시 서버 (CORS, preflight, health/debug, 업비트 인증 호출)
+- `upbit_wallet_status_client.html`: 버튼 기반 테스트 프론트
 
-### 실행 방법
-
-1. Flask 설치
+### 의존성 설치
 
 ```bash
-python3 -m pip install flask
+python3 -m pip install flask requests pyjwt python-dotenv
 ```
 
-2. 서버 실행
+### .env 설정 (필수)
+
+`/v1/status/wallet`은 인증이 필요한 API라 키가 필요합니다. 프로젝트 루트에 `.env`를 만들고 입력하세요.
+
+```env
+UPBIT_ACCESS_KEY=여기에_액세스키
+UPBIT_SECRET_KEY=여기에_시크릿키
+```
+
+키가 없으면 `/api/upbit_wallet_status`는 아래처럼 반환합니다.
+
+```json
+{"error":"MISSING_UPBIT_KEYS","hint":"Add UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY"}
+```
+
+### 실행
 
 ```bash
 python3 app.py
 ```
 
-3. 브라우저에서 열기
+브라우저 접속:
 
-- `http://localhost:8000/`
+- `http://127.0.0.1:8000/`
 
-### 서버 API
+### 엔드포인트
 
+- `GET /health` → `{"ok": true}`
 - `GET /api/upbit_wallet_status`
-  - 성공: `{ "source": "upbit", "count": ..., "data": [...] }`
-  - 실패: `{ "error": "..." }`
+  - 어떤 상황에서도 JSON 반환(성공/401/429/5xx/예외)
+  - 응답에 CORS 헤더 항상 포함
+- `OPTIONS /api/upbit_wallet_status`
+  - preflight 200 처리
+  - `Access-Control-Allow-Origin: *`
+  - `Access-Control-Allow-Methods: GET, OPTIONS`
+  - `Access-Control-Allow-Headers: Content-Type, Authorization`
+- `GET /debug/upbit_raw`
+  - 업비트 원본 status code와 body preview 반환(디버그용)
 
-`app.py`는 CORS 헤더(`Access-Control-Allow-Origin: *`)를 명시적으로 설정합니다.
+### CORS 정책
+
+`app.py`는 `after_request` + 예외 핸들러를 사용해 **모든 응답**(성공/에러/예외)에 CORS 헤더를 붙입니다.

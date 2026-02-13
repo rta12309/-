@@ -1,71 +1,159 @@
 #!/usr/bin/env python3
-"""업비트 입출금 상태 CORS 우회용 Flask 서버.
+"""업비트 입출금 상태 CORS 프록시 서버.
 
-구조:
-브라우저(프론트) -> 이 서버(/api/upbit_wallet_status) -> 업비트 API
+프론트는 업비트 직접 호출 금지:
+브라우저 -> /api/upbit_wallet_status -> 서버 -> 업비트
 """
 
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.request
-from pathlib import Path
+import os
+import uuid
+from typing import Any, Tuple
 
-from flask import Flask, Response, jsonify, send_file
+import jwt
+import requests
+from dotenv import load_dotenv
+from flask import Flask, jsonify, make_response, request, send_file
+
+load_dotenv()
 
 UPBIT_WALLET_STATUS_URL = "https://api.upbit.com/v1/status/wallet"
-BASE_DIR = Path(__file__).resolve().parent
-FRONT_HTML_PATH = BASE_DIR / "upbit_wallet_status_client.html"
+UPBIT_ACCESS_KEY = os.getenv("UPBIT_ACCESS_KEY", "").strip()
+UPBIT_SECRET_KEY = os.getenv("UPBIT_SECRET_KEY", "").strip()
 
 app = Flask(__name__)
 
 
+def with_cors(resp):
+    """모든 응답에 CORS 헤더를 강제 추가합니다."""
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return resp
+
+
 @app.after_request
-def apply_cors_headers(response: Response) -> Response:
-    """프론트에서 호출 가능하도록 CORS 헤더를 추가합니다."""
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    return response
+def apply_cors(resp):
+    return with_cors(resp)
+
+
+@app.errorhandler(Exception)
+def handle_uncaught_exception(err):  # noqa: ANN001
+    """예외가 발생해도 항상 JSON + CORS로 반환합니다."""
+    return with_cors(make_response(jsonify({"error": "INTERNAL_SERVER_ERROR", "details": str(err)}), 500))
 
 
 @app.route("/", methods=["GET"])
-def index() -> Response:
-    """간단한 테스트용 프론트 HTML을 제공합니다."""
-    return send_file(FRONT_HTML_PATH)
+def index():
+    return send_file("upbit_wallet_status_client.html")
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return with_cors(make_response(jsonify({"ok": True}), 200))
 
 
 @app.route("/api/upbit_wallet_status", methods=["GET", "OPTIONS"])
-def upbit_wallet_status() -> Response:
-    """업비트 입출금 상태를 서버에서 조회해 JSON으로 반환합니다."""
-    if urllib.request is None:  # pragma: no cover
-        return jsonify({"error": "internal error"}), 500
+def upbit_wallet_status():
+    # preflight 명시 처리
+    if request.method == "OPTIONS":
+        return with_cors(make_response("", 200))
 
-    req = urllib.request.Request(
-        UPBIT_WALLET_STATUS_URL,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "upbit-wallet-status-proxy/1.0",
-        },
-    )
+    if not UPBIT_ACCESS_KEY or not UPBIT_SECRET_KEY:
+        return with_cors(
+            make_response(
+                jsonify(
+                    {
+                        "error": "MISSING_UPBIT_KEYS",
+                        "hint": "Add UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY",
+                    }
+                ),
+                200,
+            )
+        )
+
+    payload = {"access_key": UPBIT_ACCESS_KEY, "nonce": str(uuid.uuid4())}
+    token = jwt.encode(payload, UPBIT_SECRET_KEY, algorithm="HS256")
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "upbit-wallet-status-proxy/1.0",
+    }
 
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            payload = response.read().decode("utf-8")
-            data = json.loads(payload)
-            return jsonify({"source": "upbit", "count": len(data) if isinstance(data, list) else None, "data": data})
-    except urllib.error.HTTPError as err:
-        body = err.read().decode("utf-8", errors="ignore") if hasattr(err, "read") else ""
-        return jsonify({"error": f"Upbit API HTTP error: {err.code}", "details": body}), 502
-    except urllib.error.URLError as err:
-        return jsonify({"error": f"Upbit API network error: {err.reason}"}), 502
-    except json.JSONDecodeError:
-        return jsonify({"error": "Upbit API returned invalid JSON"}), 502
-    except Exception as err:  # noqa: BLE001
-        return jsonify({"error": f"Unexpected server error: {err}"}), 500
+        res = requests.get(UPBIT_WALLET_STATUS_URL, headers=headers, timeout=10)
+        body = safe_json_or_text(res)
+
+        # 어떤 상태코드여도 fetch 실패가 아니라 JSON 응답을 주기 위해 200으로 감싸 전달
+        return with_cors(
+            make_response(
+                jsonify(
+                    {
+                        "ok": 200 <= res.status_code < 300,
+                        "upbit_status_code": res.status_code,
+                        "data": body,
+                    }
+                ),
+                200,
+            )
+        )
+    except requests.RequestException as err:
+        return with_cors(make_response(jsonify({"error": "UPBIT_REQUEST_FAILED", "details": str(err)}), 200))
+
+
+@app.route("/debug/upbit_raw", methods=["GET", "OPTIONS"])
+def debug_upbit_raw():
+    if request.method == "OPTIONS":
+        return with_cors(make_response("", 200))
+
+    if not UPBIT_ACCESS_KEY or not UPBIT_SECRET_KEY:
+        return with_cors(
+            make_response(
+                jsonify(
+                    {
+                        "error": "MISSING_UPBIT_KEYS",
+                        "hint": "Add UPBIT_ACCESS_KEY/UPBIT_SECRET_KEY",
+                    }
+                ),
+                200,
+            )
+        )
+
+    payload = {"access_key": UPBIT_ACCESS_KEY, "nonce": str(uuid.uuid4())}
+    token = jwt.encode(payload, UPBIT_SECRET_KEY, algorithm="HS256")
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "upbit-wallet-status-proxy/1.0",
+    }
+
+    try:
+        res = requests.get(UPBIT_WALLET_STATUS_URL, headers=headers, timeout=10)
+        raw_text = res.text[:3000]
+        return with_cors(
+            make_response(
+                jsonify(
+                    {
+                        "upbit_status_code": res.status_code,
+                        "content_type": res.headers.get("Content-Type", ""),
+                        "body_preview": raw_text,
+                    }
+                ),
+                200,
+            )
+        )
+    except requests.RequestException as err:
+        return with_cors(make_response(jsonify({"error": "UPBIT_REQUEST_FAILED", "details": str(err)}), 200))
+
+
+def safe_json_or_text(res: requests.Response) -> Any:
+    """업비트 응답이 JSON 아니어도 안전하게 반환."""
+    try:
+        return res.json()
+    except ValueError:
+        return {"text": res.text[:3000]}
 
 
 if __name__ == "__main__":
-    # 개발 실행: python3 app.py
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    app.run(host="0.0.0.0", port=8000, debug=False)
