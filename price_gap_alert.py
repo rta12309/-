@@ -18,7 +18,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import islice
-from typing import Dict, Iterable, Iterator, List, Sequence, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 UPBIT_TICKER_URL = "https://api.upbit.com/v1/ticker?markets={markets}"
 UPBIT_MARKETS_URL = "https://api.upbit.com/v1/market/all?isDetails=false"
@@ -174,13 +174,35 @@ def fetch_bithumb_transfer_statuses() -> Dict[str, TransferStatus]:
     return statuses
 
 
+
+
+def fetch_transfer_statuses_safe() -> Tuple[Optional[Dict[str, TransferStatus]], Optional[Dict[str, TransferStatus]], List[str]]:
+    warnings: List[str] = []
+    upbit_statuses: Optional[Dict[str, TransferStatus]] = None
+    bithumb_statuses: Optional[Dict[str, TransferStatus]] = None
+
+    try:
+        upbit_statuses = fetch_upbit_transfer_statuses()
+    except Exception as err:  # noqa: BLE001
+        warnings.append(f"업비트 입출금 상태 조회 실패: {err}")
+
+    try:
+        bithumb_statuses = fetch_bithumb_transfer_statuses()
+    except Exception as err:  # noqa: BLE001
+        warnings.append(f"빗썸 입출금 상태 조회 실패: {err}")
+
+    return upbit_statuses, bithumb_statuses, warnings
+
 def filter_restricted_coins(
     symbols: Sequence[str],
-    upbit_statuses: Dict[str, TransferStatus],
-    bithumb_statuses: Dict[str, TransferStatus],
+    upbit_statuses: Optional[Dict[str, TransferStatus]],
+    bithumb_statuses: Optional[Dict[str, TransferStatus]],
 ) -> Tuple[List[str], List[RestrictedCoin]]:
     tradable: List[str] = []
     restricted: List[RestrictedCoin] = []
+
+    if upbit_statuses is None or bithumb_statuses is None:
+        return list(symbols), []
 
     default_status = TransferStatus(deposit_enabled=False, withdraw_enabled=False)
     for symbol in symbols:
@@ -283,11 +305,13 @@ def monitor(threshold: float, interval: int, once: bool) -> int:
         try:
             upbit_prices = fetch_upbit_prices(symbols)
             bithumb_prices = fetch_bithumb_prices()
-            upbit_statuses = fetch_upbit_transfer_statuses()
-            bithumb_statuses = fetch_bithumb_transfer_statuses()
+            upbit_statuses, bithumb_statuses, status_warnings = fetch_transfer_statuses_safe()
 
             common_symbols = sorted(set(upbit_prices) & set(bithumb_prices))
             tradable_symbols, restricted = filter_restricted_coins(common_symbols, upbit_statuses, bithumb_statuses)
+
+            for warning in status_warnings:
+                print(f"[{now}] 경고: {warning}", file=sys.stderr)
 
             filtered_upbit = {s: upbit_prices[s] for s in tradable_symbols if s in upbit_prices}
             filtered_bithumb = {s: bithumb_prices[s] for s in tradable_symbols if s in bithumb_prices}

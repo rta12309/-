@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>업비트-빗썸 가격차이 웹 모니터</title>
+  <style>
+    body{font-family:Arial,sans-serif;max-width:980px;margin:20px auto;padding:0 12px}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    input,button{padding:8px}
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    th,td{border:1px solid #ddd;padding:6px;font-size:13px}
+    th{background:#f5f5f5}
+    .warn{color:#b35a00}
+    .muted{color:#666}
+  </style>
+</head>
+<body>
+  <h2>업비트-빗썸 가격차이 웹 모니터</h2>
+  <p class="muted">설치 없이 브라우저에서 1회 조회합니다.</p>
+
+  <div class="row">
+    <label>기준(%): <input id="threshold" type="number" value="5" step="0.1" /></label>
+    <button id="runBtn">조회</button>
+  </div>
+
+  <p id="status"></p>
+  <p id="warnings" class="warn"></p>
+
+  <h3>입출금 제한 코인(알림 제외)</h3>
+  <div id="restricted" class="muted">-</div>
+
+  <h3>알림 대상 결과</h3>
+  <table>
+    <thead><tr><th>코인</th><th>갭%</th><th>업비트</th><th>빗썸</th></tr></thead>
+    <tbody id="resultBody"></tbody>
+  </table>
+
+<script>
+const upbitMarketsUrl='https://api.upbit.com/v1/market/all?isDetails=false';
+const upbitTickerUrl=(markets)=>`https://api.upbit.com/v1/ticker?markets=${markets}`;
+const upbitWalletUrl='https://api.upbit.com/v1/status/wallet';
+const bithumbTickerUrl='https://api.bithumb.com/public/ticker/ALL_KRW';
+const bithumbAssetUrl='https://api.bithumb.com/public/assetsstatus/ALL';
+
+const boolFlag=(v)=>['1','true','y','yes','working','normal','available'].includes(String(v).toLowerCase().trim());
+const chunk=(arr,size)=>{const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out;};
+
+async function jfetch(url){const r=await fetch(url); if(!r.ok) throw new Error(`HTTP ${r.status}`); return r.json();}
+
+async function fetchUpbitSymbols(){
+  const data=await jfetch(upbitMarketsUrl);
+  return data.filter(x=>x.market?.startsWith('KRW-')).map(x=>x.market.split('-')[1]);
+}
+
+async function fetchUpbitPrices(symbols){
+  const result={};
+  for(const part of chunk(symbols,100)){
+    const markets=part.map(s=>`KRW-${s}`).join(',');
+    const data=await jfetch(upbitTickerUrl(markets));
+    for(const item of data){
+      const m=item.market||'';
+      if(m.startsWith('KRW-') && typeof item.trade_price==='number') result[m.split('-')[1]]=item.trade_price;
+    }
+  }
+  return result;
+}
+
+async function fetchBithumbPrices(){
+  const data=await jfetch(bithumbTickerUrl);
+  if(data.status!=='0000') throw new Error('빗썸 티커 실패');
+  const out={};
+  for(const [sym,info] of Object.entries(data.data||{})){
+    if(sym==='date' || typeof info!=='object') continue;
+    out[sym]=Number(info.closing_price);
+  }
+  return out;
+}
+
+async function fetchStatusesSafe(){
+  const warnings=[];
+  let up=null, bi=null;
+  try{
+    const data=await jfetch(upbitWalletUrl);
+    up={};
+    for(const it of data){
+      up[(it.currency||'').toUpperCase()]={
+        d:String(it.wallet_state).toLowerCase()==='working',
+        w:String(it.block_state).toLowerCase()==='normal'
+      };
+    }
+  }catch(e){warnings.push(`업비트 입출금 상태 조회 실패: ${e.message}`);}
+
+  try{
+    const data=await jfetch(bithumbAssetUrl);
+    if(data.status!=='0000') throw new Error('응답실패');
+    bi={};
+    for(const [sym,info] of Object.entries(data.data||{})){
+      if(typeof info!=='object') continue;
+      bi[sym.toUpperCase()]={
+        d:boolFlag(info.deposit_status ?? info.deposit ?? info.depositState ?? ''),
+        w:boolFlag(info.withdrawal_status ?? info.withdrawal ?? info.withdrawState ?? '')
+      };
+    }
+  }catch(e){warnings.push(`빗썸 입출금 상태 조회 실패: ${e.message}`);}
+
+  return {up,bi,warnings};
+}
+
+function filterCoins(common,up,bi){
+  if(!up || !bi) return {tradable:[...common],restricted:[]};
+  const restricted=[]; const tradable=[];
+  for(const s of common){
+    const u=up[s]||{d:false,w:false};
+    const b=bi[s]||{d:false,w:false};
+    if(u.d&&u.w&&b.d&&b.w) tradable.push(s); else restricted.push({s,u,b});
+  }
+  return {tradable,restricted};
+}
+
+function statusText(x){return `${x.d?'입금가능':'입금불가'}/${x.w?'출금가능':'출금불가'}`}
+
+async function run(){
+  const t=Number(document.getElementById('threshold').value||5);
+  const status=document.getElementById('status');
+  const warningsEl=document.getElementById('warnings');
+  const restrictedEl=document.getElementById('restricted');
+  const body=document.getElementById('resultBody');
+  body.innerHTML='';
+  status.textContent='조회 중...';
+  warningsEl.textContent='';
+  restrictedEl.textContent='-';
+
+  try{
+    const symbols=await fetchUpbitSymbols();
+    const [upPrices,biPrices,statuses]=await Promise.all([fetchUpbitPrices(symbols),fetchBithumbPrices(),fetchStatusesSafe()]);
+    const common=Object.keys(upPrices).filter(s=>biPrices[s]!=null).sort();
+    const {tradable,restricted}=filterCoins(common,statuses.up,statuses.bi);
+
+    warningsEl.textContent=statuses.warnings.join(' | ');
+    if(restricted.length){
+      restrictedEl.innerHTML=restricted.slice(0,20).map(x=>`- ${x.s}: 업비트 ${statusText(x.u)}, 빗썸 ${statusText(x.b)}`).join('<br/>');
+      if(restricted.length>20) restrictedEl.innerHTML += `<br/>... 외 ${restricted.length-20}개`;
+    } else restrictedEl.textContent='없음';
+
+    const rows=[];
+    for(const s of tradable){
+      const u=upPrices[s], b=biPrices[s];
+      if(!b||b<=0) continue;
+      const gap=Math.abs(u-b)/b*100;
+      if(gap>=t) rows.push({s,gap,u,b});
+    }
+    rows.sort((a,b)=>b.gap-a.gap);
+
+    for(const r of rows){
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${r.s}</td><td>${r.gap.toFixed(2)}%</td><td>${r.u.toLocaleString()}</td><td>${r.b.toLocaleString()}</td>`;
+      body.appendChild(tr);
+    }
+    status.textContent=`완료: 공통 ${common.length}개 / 알림대상 ${tradable.length}개 / 기준초과 ${rows.length}개`;
+  }catch(e){
+    status.textContent='실패';
+    warningsEl.textContent=String(e);
+  }
+}
+
+document.getElementById('runBtn').addEventListener('click',run);
+</script>
+</body>
+</html>
