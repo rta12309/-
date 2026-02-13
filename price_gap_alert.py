@@ -22,7 +22,12 @@ from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 UPBIT_TICKER_URL = "https://api.upbit.com/v1/ticker?markets={markets}"
 UPBIT_MARKETS_URL = "https://api.upbit.com/v1/market/all?isDetails=false"
-UPBIT_WALLET_STATUS_URL = "https://api.upbit.com/v1/status/wallet"
+UPBIT_WALLET_STATUS_URLS = (
+    "https://api.upbit.com/v1/status/wallet",
+    "https://sg-api.upbit.com/v1/status/wallet",
+    "https://id-api.upbit.com/v1/status/wallet",
+    "https://th-api.upbit.com/v1/status/wallet",
+)
 BITHUMB_TICKER_URL = "https://api.bithumb.com/public/ticker/ALL_KRW"
 BITHUMB_ASSET_STATUS_URL = "https://api.bithumb.com/public/assetsstatus/ALL"
 DEFAULT_THRESHOLD = 5.0
@@ -130,24 +135,45 @@ def to_bool_flag(value: object) -> bool:
 
 
 def fetch_upbit_transfer_statuses() -> Dict[str, TransferStatus]:
-    data = fetch_json(UPBIT_WALLET_STATUS_URL)
-    if not isinstance(data, list):
-        raise RuntimeError("업비트 입출금 상태 데이터 형식이 올바르지 않습니다.")
+    last_error: Optional[str] = None
 
-    statuses: Dict[str, TransferStatus] = {}
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        symbol = item.get("currency")
-        wallet_state = item.get("wallet_state")
-        block_state = item.get("block_state")
-        if not isinstance(symbol, str):
+    for url in UPBIT_WALLET_STATUS_URLS:
+        try:
+            data = fetch_json(url)
+        except Exception as err:  # noqa: BLE001
+            last_error = f"{url}: {err}"
             continue
 
-        deposit_enabled = str(wallet_state).lower() == "working"
-        withdraw_enabled = str(block_state).lower() == "normal"
-        statuses[symbol.upper()] = TransferStatus(deposit_enabled=deposit_enabled, withdraw_enabled=withdraw_enabled)
-    return statuses
+        if isinstance(data, dict) and data.get("error"):
+            last_error = f"{url}: {data.get('error')}"
+            continue
+
+        if not isinstance(data, list):
+            last_error = f"{url}: 업비트 입출금 상태 데이터 형식이 올바르지 않습니다."
+            continue
+
+        statuses: Dict[str, TransferStatus] = {}
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            symbol = item.get("currency")
+            wallet_state = item.get("wallet_state")
+            block_state = item.get("block_state")
+            if not isinstance(symbol, str):
+                continue
+
+            deposit_enabled = str(wallet_state).lower() == "working"
+            withdraw_enabled = str(block_state).lower() == "normal"
+            statuses[symbol.upper()] = TransferStatus(
+                deposit_enabled=deposit_enabled,
+                withdraw_enabled=withdraw_enabled,
+            )
+
+        if statuses:
+            return statuses
+        last_error = f"{url}: 업비트 입출금 상태 응답이 비어 있습니다."
+
+    raise RuntimeError(f"업비트 입출금 상태 조회에 실패했습니다. {last_error or ''}".strip())
 
 
 def fetch_bithumb_transfer_statuses() -> Dict[str, TransferStatus]:

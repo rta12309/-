@@ -48,7 +48,12 @@
 <script>
 const upbitMarketsUrl='https://api.upbit.com/v1/market/all?isDetails=false';
 const upbitTickerUrl=(markets)=>`https://api.upbit.com/v1/ticker?markets=${markets}`;
-const upbitWalletUrl='https://api.upbit.com/v1/status/wallet';
+const upbitWalletUrls=[
+  'https://api.upbit.com/v1/status/wallet',
+  'https://sg-api.upbit.com/v1/status/wallet',
+  'https://id-api.upbit.com/v1/status/wallet',
+  'https://th-api.upbit.com/v1/status/wallet'
+];
 const bithumbTickerUrl='https://api.bithumb.com/public/ticker/ALL_KRW';
 const bithumbAssetUrl='https://api.bithumb.com/public/assetsstatus/ALL';
 
@@ -97,16 +102,30 @@ async function fetchBithumbPrices(){
 async function fetchStatusesSafe(){
   const warnings=[];
   let up=null, bi=null;
-  try{
-    const data=await jfetch(upbitWalletUrl);
-    up={};
-    for(const it of data){
-      up[(it.currency||'').toUpperCase()]={
-        d:String(it.wallet_state).toLowerCase()==='working',
-        w:String(it.block_state).toLowerCase()==='normal'
-      };
+  {
+    let ok=false;
+    for(const url of upbitWalletUrls){
+      try{
+        const data=await jfetch(url);
+        if(Array.isArray(data)){
+          up={};
+          for(const it of data){
+            up[(it.currency||'').toUpperCase()]={
+              d:String(it.wallet_state).toLowerCase()==='working',
+              w:String(it.block_state).toLowerCase()==='normal'
+            };
+          }
+          ok=true;
+          break;
+        }
+      }catch(e){
+        warnings.push(`업비트 입출금 상태 조회 실패(${url}): ${e.message}`);
+      }
     }
-  }catch(e){warnings.push(`업비트 입출금 상태 조회 실패: ${e.message}`);}
+    if(!ok){
+      warnings.push('업비트 입출금 상태 조회에 모두 실패했습니다.');
+    }
+  }
 
   try{
     const data=await jfetch(bithumbAssetUrl);
