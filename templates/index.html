@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>om가격차 모니터링</title>
+  <title>바낸업빗가격차이 알림</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; background: #f4f6f8; }
     .card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
@@ -23,7 +23,7 @@
   </style>
 </head>
 <body>
-  <h2>om가격차 모니터링 (웹 전용)</h2>
+  <h2>바낸업빗가격차이 알림 (웹 전용)</h2>
 
   <div class="card">
     <div class="row">
@@ -35,12 +35,14 @@
     </div>
     <hr />
     <div class="row">
+      <label>티커(예: OM, XRP) <input id="ticker" type="text" value="OM"></label>
       <label>임계값(%) <input id="threshold" type="number" step="0.1" value="5"></label>
       <label>조회주기(초) <input id="interval" type="number" min="3" value="5"></label>
       <label>쿨다운(초) <input id="cooldown" type="number" min="10" value="300"></label>
+      <label>현물/선물 괴리 차단값(%) <input id="gapThreshold" type="number" step="0.1" min="0.1" value="2"></label>
       <label><input id="webAlertToggle" type="checkbox" checked> 웹 알림 ON</label>
       <label><input id="tgToggle" type="checkbox"> 텔레그램 ON</label>
-      <label><input id="ignoreSpotFuturesGap" type="checkbox"> 바이낸스 현물/선물 차이 2%↑이면 알림 제외</label>
+      <label><input id="ignoreSpotFuturesGap" type="checkbox"> 현물/선물 괴리 차단 ON</label>
     </div>
     <div class="row" style="margin-top: 8px;">
       <label>Telegram Bot Token <input id="tgToken" type="text" placeholder="12345:ABC..."></label>
@@ -54,10 +56,11 @@
     <table>
       <thead><tr><th>항목</th><th>가격</th></tr></thead>
       <tbody>
-        <tr><td>업비트 KRW-OM</td><td id="pUpbit">-</td></tr>
-        <tr><td>빗썸 OM_KRW</td><td id="pBithumb">-</td></tr>
-        <tr><td>바이낸스 현물 OMUSDT</td><td id="pBinanceSpotUsdt">-</td></tr>
-        <tr><td>바이낸스 선물 OMUSDT (차단조건 확인용)</td><td id="pBinanceFuturesUsdt">-</td></tr>
+        <tr><td>업비트 KRW-<span class="tickerText">OM</span></td><td id="pUpbit">-</td></tr>
+        <tr><td>빗썸 <span class="tickerText">OM</span>_KRW</td><td id="pBithumb">-</td></tr>
+        <tr><td>바이낸스 현물 <span class="tickerText">OM</span>USDT</td><td id="pBinanceSpotUsdt">-</td></tr>
+        <tr><td>바이낸스 선물 <span class="tickerText">OM</span>USDT</td><td id="pBinanceFuturesUsdt">-</td></tr>
+        <tr><td>바이낸스 선물-현물 가격차이(%)</td><td id="pBinanceGap">-</td></tr>
         <tr><td>USDT→KRW (업비트 KRW-USDT)</td><td id="pUsdtKrw">-</td></tr>
         <tr><td>바이낸스 현물 환산 KRW</td><td id="pBinanceSpotKrw">-</td></tr>
       </tbody>
@@ -85,7 +88,6 @@
   <div id="toast"></div>
 
   <script>
-    const BINANCE_GAP_THRESHOLD = 2.0;
     let timer = null;
     let lastWebAlertAt = 0;
     let lastTelegramAlertAt = 0;
@@ -120,7 +122,7 @@
       showToast(message);
       beep();
       if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification('OM 가격차 알림', { body: message });
+        new Notification('가격차 알림', { body: message });
       }
     }
 
@@ -132,6 +134,14 @@
       const minV = Math.min(a, b);
       if (!isFinite(minV) || minV <= 0) return 0;
       return Math.abs(a - b) / minV * 100;
+    }
+
+    function currentTicker() {
+      return (document.getElementById('ticker').value || 'OM').trim().toUpperCase();
+    }
+
+    function syncTickerLabel(ticker) {
+      document.querySelectorAll('.tickerText').forEach(el => { el.textContent = ticker; });
     }
 
     function updateDiffRow(key, value, threshold) {
@@ -158,26 +168,30 @@
       return res.json();
     }
 
-    async function getPrices() {
-      const [upbitOm, upbitUsdt, bithumb, binanceSpot, binanceFutures] = await Promise.all([
-        fetchJson('https://api.upbit.com/v1/ticker?markets=KRW-OM'),
+    async function getPrices(ticker) {
+      const upbitMarket = `KRW-${ticker}`;
+      const bithumbMarket = `${ticker}_KRW`;
+      const binanceSymbol = `${ticker}USDT`;
+
+      const [upbitTicker, upbitUsdt, bithumb, binanceSpot, binanceFutures] = await Promise.all([
+        fetchJson(`https://api.upbit.com/v1/ticker?markets=${upbitMarket}`),
         fetchJson('https://api.upbit.com/v1/ticker?markets=KRW-USDT'),
-        fetchJson('https://api.bithumb.com/public/ticker/OM_KRW'),
-        fetchJson('https://api.binance.com/api/v3/ticker/price?symbol=OMUSDT'),
-        fetchJson('https://fapi.binance.com/fapi/v2/ticker/price?symbol=OMUSDT'),
+        fetchJson(`https://api.bithumb.com/public/ticker/${bithumbMarket}`),
+        fetchJson(`https://api.binance.com/api/v3/ticker/price?symbol=${binanceSymbol}`),
+        fetchJson(`https://fapi.binance.com/fapi/v2/ticker/price?symbol=${binanceSymbol}`),
       ]);
 
-      if (!Array.isArray(upbitOm) || !upbitOm[0]?.trade_price) throw new Error('업비트 KRW-OM 응답 오류');
+      if (!Array.isArray(upbitTicker) || !upbitTicker[0]?.trade_price) throw new Error(`업비트 ${upbitMarket} 미지원 또는 응답 오류`);
       if (!Array.isArray(upbitUsdt) || !upbitUsdt[0]?.trade_price) throw new Error('업비트 KRW-USDT 응답 오류');
-      if (bithumb.status !== '0000') throw new Error('빗썸 응답 오류');
-      if (!binanceSpot.price || !binanceFutures.price) throw new Error('바이낸스 응답 오류');
+      if (bithumb.status !== '0000') throw new Error(`빗썸 ${bithumbMarket} 미지원 또는 응답 오류`);
+      if (!binanceSpot.price || !binanceFutures.price) throw new Error(`바이낸스 ${binanceSymbol} 미지원 또는 응답 오류`);
 
       return {
-        upbitOmKrw: Number(upbitOm[0].trade_price),
+        upbitKrw: Number(upbitTicker[0].trade_price),
         usdtKrw: Number(upbitUsdt[0].trade_price),
-        bithumbOmKrw: Number(bithumb.data.closing_price),
-        binanceSpotOmUsdt: Number(binanceSpot.price),
-        binanceFuturesOmUsdt: Number(binanceFutures.price),
+        bithumbKrw: Number(bithumb.data.closing_price),
+        binanceSpotUsdt: Number(binanceSpot.price),
+        binanceFuturesUsdt: Number(binanceFutures.price),
       };
     }
 
@@ -197,25 +211,30 @@
 
     async function tick() {
       try {
+        const ticker = currentTicker();
+        syncTickerLabel(ticker);
+
         const threshold = Number(document.getElementById('threshold').value || 5);
         const cooldownSec = Number(document.getElementById('cooldown').value || 300);
+        const gapThreshold = Number(document.getElementById('gapThreshold').value || 2);
 
-        const p = await getPrices();
-        const binanceSpotKrw = p.binanceSpotOmUsdt * p.usdtKrw;
-        const spotFuturesGap = diffPercent(p.binanceSpotOmUsdt, p.binanceFuturesOmUsdt);
+        const p = await getPrices(ticker);
+        const binanceSpotKrw = p.binanceSpotUsdt * p.usdtKrw;
+        const spotFuturesGap = diffPercent(p.binanceSpotUsdt, p.binanceFuturesUsdt);
 
-        document.getElementById('pUpbit').textContent = `${num(p.upbitOmKrw)} KRW`;
-        document.getElementById('pBithumb').textContent = `${num(p.bithumbOmKrw)} KRW`;
-        document.getElementById('pBinanceSpotUsdt').textContent = `${num(p.binanceSpotOmUsdt, 6)} USDT`;
-        document.getElementById('pBinanceFuturesUsdt').textContent = `${num(p.binanceFuturesOmUsdt, 6)} USDT`;
+        document.getElementById('pUpbit').textContent = `${num(p.upbitKrw)} KRW`;
+        document.getElementById('pBithumb').textContent = `${num(p.bithumbKrw)} KRW`;
+        document.getElementById('pBinanceSpotUsdt').textContent = `${num(p.binanceSpotUsdt, 6)} USDT`;
+        document.getElementById('pBinanceFuturesUsdt').textContent = `${num(p.binanceFuturesUsdt, 6)} USDT`;
+        document.getElementById('pBinanceGap').textContent = `${num(spotFuturesGap, 2)}%`;
         document.getElementById('pUsdtKrw').textContent = `${num(p.usdtKrw)} KRW`;
         document.getElementById('pBinanceSpotKrw').textContent = `${num(binanceSpotKrw)} KRW`;
         document.getElementById('updatedAt').textContent = new Date().toLocaleString();
 
         const diffs = {
-          upbit_bithumb: diffPercent(p.upbitOmKrw, p.bithumbOmKrw),
-          upbit_binance_spot: diffPercent(p.upbitOmKrw, binanceSpotKrw),
-          bithumb_binance_spot: diffPercent(p.bithumbOmKrw, binanceSpotKrw),
+          upbit_bithumb: diffPercent(p.upbitKrw, p.bithumbKrw),
+          upbit_binance_spot: diffPercent(p.upbitKrw, binanceSpotKrw),
+          bithumb_binance_spot: diffPercent(p.bithumbKrw, binanceSpotKrw),
         };
 
         updateDiffRow('upbit_bithumb', diffs.upbit_bithumb, threshold);
@@ -223,12 +242,12 @@
         updateDiffRow('bithumb_binance_spot', diffs.bithumb_binance_spot, threshold);
 
         const ignoreGap = document.getElementById('ignoreSpotFuturesGap').checked;
-        const suppressAlerts = ignoreGap && spotFuturesGap >= BINANCE_GAP_THRESHOLD;
+        const suppressAlerts = ignoreGap && spotFuturesGap >= gapThreshold;
 
         const gapNotice = document.getElementById('gapNotice');
         if (suppressAlerts) {
           gapNotice.style.display = 'block';
-          gapNotice.textContent = `알림 차단중: 바이낸스 현물/선물 차이 ${num(spotFuturesGap, 2)}% (기준 ${num(BINANCE_GAP_THRESHOLD, 2)}%)`;
+          gapNotice.textContent = `알림 차단중: 바이낸스 현물/선물 차이 ${num(spotFuturesGap, 2)}% (기준 ${num(gapThreshold, 2)}%)`;
         } else {
           gapNotice.style.display = 'none';
           gapNotice.textContent = '';
@@ -238,9 +257,8 @@
           .filter(([, value]) => value >= threshold)
           .map(([pair, diff]) => ({ pair, diff }));
 
-        // 버그 수정 핵심: suppressAlerts면 웹/텔레그램 알림 둘 다 무조건 차단
         if (!suppressAlerts && triggered.length > 0) {
-          const msg = triggered.map(x => `${x.pair}: ${num(x.diff, 2)}%`).join(' | ');
+          const msg = `${ticker} ` + triggered.map(x => `${x.pair}: ${num(x.diff, 2)}%`).join(' | ');
           const now = Date.now() / 1000;
 
           if (document.getElementById('webAlertToggle').checked && (now - lastWebAlertAt >= cooldownSec)) {
@@ -250,7 +268,7 @@
 
           if (document.getElementById('tgToggle').checked && (now - lastTelegramAlertAt >= cooldownSec)) {
             lastTelegramAlertAt = now;
-            sendTelegram(`[OM 가격차 알림]\n${msg}`).catch(err => showToast(err.message));
+            sendTelegram(`[가격차 알림]\n${msg}`).catch(err => showToast(err.message));
           }
         }
       } catch (err) {
@@ -283,7 +301,7 @@
         notifyWeb('[테스트] 웹 알림 테스트입니다.');
         return;
       }
-      await sendTelegram('[테스트] OM 가격 모니터 텔레그램 알림 테스트');
+      await sendTelegram('[테스트] 가격차 모니터 텔레그램 알림 테스트');
       showToast('텔레그램 테스트 전송 완료');
     }
 
