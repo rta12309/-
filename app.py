@@ -67,13 +67,18 @@ def save_keys(access_key: str, secret_key: str) -> None:
 
 def build_auth_headers(access_key: str, secret_key: str) -> dict[str, str]:
     """업비트 JWT Authorization 헤더 생성."""
-    jwt_payload = {"access_key": access_key, "nonce": str(uuid.uuid4())}
-    token = jwt.encode(jwt_payload, secret_key, algorithm="HS256")
-    return {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {token}",
-        "User-Agent": "upbit-wallet-status-proxy/1.0",
+    payload = {
+        "access_key": access_key,
+        "nonce": str(uuid.uuid4()),
     }
+    token = jwt.encode(payload, secret_key, algorithm="HS256")
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+    }
+    return headers
 
 
 def safe_json_or_text(res: requests.Response) -> Any:
@@ -172,8 +177,13 @@ def upbit_wallet_status():
         return missing_keys_response()
 
     headers = build_auth_headers(access_key, secret_key)
+    print("AUTH HEADER:", headers)
     try:
-        res = requests.get(UPBIT_WALLET_STATUS_URL, headers=headers, timeout=10)
+        res = requests.get(
+            "https://api.upbit.com/v1/status/wallet",
+            headers=headers,
+            timeout=10,
+        )
         return with_cors(
             make_response(
                 jsonify(
@@ -200,8 +210,13 @@ def debug_upbit_raw():
         return missing_keys_response()
 
     headers = build_auth_headers(access_key, secret_key)
+    print("AUTH HEADER:", headers)
     try:
-        res = requests.get(UPBIT_WALLET_STATUS_URL, headers=headers, timeout=10)
+        res = requests.get(
+            "https://api.upbit.com/v1/status/wallet",
+            headers=headers,
+            timeout=10,
+        )
         return with_cors(
             make_response(
                 jsonify(
