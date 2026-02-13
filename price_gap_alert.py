@@ -10,14 +10,11 @@
 from __future__ import annotations
 
 import argparse
-import html
 import json
-import re
 import sys
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import islice
@@ -30,15 +27,13 @@ UPBIT_WALLET_STATUS_URLS = (
     "https://sg-api.upbit.com/v1/status/wallet",
     "https://id-api.upbit.com/v1/status/wallet",
     "https://th-api.upbit.com/v1/status/wallet",
+    "https://global-api.upbit.com/v1/status/wallet",
 )
 BITHUMB_TICKER_URL = "https://api.bithumb.com/public/ticker/ALL_KRW"
 BITHUMB_ASSET_STATUS_URL = "https://api.bithumb.com/public/assetsstatus/ALL"
-THEDDARI_SYMBOL_URL = "https://theddari.com/crypto/{symbol}"
 DEFAULT_THRESHOLD = 5.0
 DEFAULT_INTERVAL = 10
 UPBIT_TICKER_BATCH_SIZE = 100  # Upbit ticker endpoint limit
-THEDDARI_CRAWL_TIMEOUT = 4
-THEDDARI_CRAWL_WORKERS = 8
 
 
 @dataclass(frozen=True)
@@ -61,20 +56,10 @@ class RestrictedCoin:
     upbit: TransferStatus
     bithumb: TransferStatus
 
-
-
-THEDDARI_STATUS_CACHE: Dict[str, Tuple[Optional[TransferStatus], Optional[TransferStatus]]] = {}
-
 def fetch_json(url: str, timeout: int = 10) -> dict | list:
     req = urllib.request.Request(url, headers={"User-Agent": "price-gap-alert/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
-
-
-def fetch_text(url: str, timeout: int = THEDDARI_CRAWL_TIMEOUT) -> str:
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 price-gap-alert/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        return response.read().decode("utf-8", errors="ignore")
 
 
 def chunked(items: Sequence[str], size: int) -> Iterator[List[str]]:
@@ -149,46 +134,64 @@ def to_bool_flag(value: object) -> bool:
     return text in {"1", "true", "y", "yes", "working", "normal", "available"}
 
 
+def _to_upbit_flag(value: object, *, wallet: bool) -> bool:
+    text = str(value).strip().lower()
+    if wallet:
+        return text in {"working", "normal", "available", "true", "1"}
+    return text in {"normal", "working", "available", "true", "1"}
+
+
+def _parse_upbit_statuses(data: object) -> Dict[str, TransferStatus]:
+    if not isinstance(data, list):
+        return {}
+
+    statuses: Dict[str, TransferStatus] = {}
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        symbol = item.get("currency") or item.get("currency_symbol") or item.get("code")
+        if not isinstance(symbol, str) or not symbol.strip():
+            continue
+
+        wallet_raw = item.get("wallet_state", item.get("deposit_status", item.get("deposit_state", item.get("deposit", ""))))
+        block_raw = item.get("block_state", item.get("withdraw_status", item.get("withdraw_state", item.get("withdrawal", ""))))
+
+        statuses[symbol.upper()] = TransferStatus(
+            deposit_enabled=_to_upbit_flag(wallet_raw, wallet=True),
+            withdraw_enabled=_to_upbit_flag(block_raw, wallet=False),
+        )
+    return statuses
+
+
 def fetch_upbit_transfer_statuses() -> Dict[str, TransferStatus]:
-    last_error: Optional[str] = None
+    errors: List[str] = []
 
     for url in UPBIT_WALLET_STATUS_URLS:
         try:
-            data = fetch_json(url)
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 price-gap-alert/1.0",
+                    "Accept": "application/json",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode("utf-8"))
         except Exception as err:  # noqa: BLE001
-            last_error = f"{url}: {err}"
+            errors.append(f"{url}: {err}")
             continue
 
         if isinstance(data, dict) and data.get("error"):
-            last_error = f"{url}: {data.get('error')}"
+            errors.append(f"{url}: {data.get('error')}")
             continue
 
-        if not isinstance(data, list):
-            last_error = f"{url}: 업비트 입출금 상태 데이터 형식이 올바르지 않습니다."
-            continue
-
-        statuses: Dict[str, TransferStatus] = {}
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            symbol = item.get("currency")
-            wallet_state = item.get("wallet_state")
-            block_state = item.get("block_state")
-            if not isinstance(symbol, str):
-                continue
-
-            deposit_enabled = str(wallet_state).lower() == "working"
-            withdraw_enabled = str(block_state).lower() == "normal"
-            statuses[symbol.upper()] = TransferStatus(
-                deposit_enabled=deposit_enabled,
-                withdraw_enabled=withdraw_enabled,
-            )
-
+        statuses = _parse_upbit_statuses(data)
         if statuses:
             return statuses
-        last_error = f"{url}: 업비트 입출금 상태 응답이 비어 있습니다."
 
-    raise RuntimeError(f"업비트 입출금 상태 조회에 실패했습니다. {last_error or ''}".strip())
+        errors.append(f"{url}: 업비트 입출금 상태 응답이 비어 있거나 형식이 다릅니다.")
+
+    raise RuntimeError("업비트 입출금 상태 조회에 실패했습니다. " + " | ".join(errors))
 
 
 def fetch_bithumb_transfer_statuses() -> Dict[str, TransferStatus]:
@@ -218,94 +221,19 @@ def fetch_bithumb_transfer_statuses() -> Dict[str, TransferStatus]:
 
 
 def fetch_transfer_statuses_safe() -> Tuple[Optional[Dict[str, TransferStatus]], Optional[Dict[str, TransferStatus]], List[str]]:
-    return fetch_transfer_statuses_with_fallback([])[:3]
-
-
-def _extract_flag_near(text: str, key: str) -> Optional[bool]:
-    key_group = f"(?:{key})"
-    patterns = [
-        rf"{key_group}\s*[:：\-]?\s*(?P<state>가능|불가|점검|중지|정상|working|normal|suspend(?:ed)?)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if not match:
-            continue
-        token = str(match.group("state")).lower()
-        if token in {"가능", "정상", "working", "normal"}:
-            return True
-        if token in {"불가", "점검", "중지", "suspend", "suspended"}:
-            return False
-    return None
-
-
-def _extract_exchange_status(section: str) -> Optional[TransferStatus]:
-    deposit = _extract_flag_near(section, "입금|deposit")
-    withdraw = _extract_flag_near(section, "출금|withdraw")
-    if deposit is None or withdraw is None:
-        return None
-    return TransferStatus(deposit_enabled=deposit, withdraw_enabled=withdraw)
-
-
-def parse_theddari_statuses_from_html(raw_html: str) -> Tuple[Optional[TransferStatus], Optional[TransferStatus]]:
-    normalized = re.sub(r"\s+", " ", html.unescape(raw_html))
-
-    def section_around(keyword: str) -> str:
-        idx = normalized.find(keyword)
-        if idx < 0:
-            return ""
-        start = idx
-        end = min(len(normalized), idx + 360)
-        return normalized[start:end]
-
-    upbit_status = _extract_exchange_status(section_around("업비트"))
-    bithumb_status = _extract_exchange_status(section_around("빗썸"))
-    return upbit_status, bithumb_status
-
-
-def fetch_theddari_transfer_statuses(symbols: Sequence[str]) -> Tuple[Dict[str, TransferStatus], Dict[str, TransferStatus], List[str]]:
-    upbit_statuses: Dict[str, TransferStatus] = {}
-    bithumb_statuses: Dict[str, TransferStatus] = {}
     warnings: List[str] = []
+    upbit_statuses: Optional[Dict[str, TransferStatus]] = None
+    bithumb_statuses: Optional[Dict[str, TransferStatus]] = None
 
-    unresolved: List[str] = []
-    seen_unresolved: set[str] = set()
-    for symbol in symbols:
-        upper = symbol.upper()
-        cached = THEDDARI_STATUS_CACHE.get(upper)
-        if cached is None:
-            if upper not in seen_unresolved:
-                unresolved.append(upper)
-                seen_unresolved.add(upper)
-            continue
-        upbit_cached, bithumb_cached = cached
-        if upbit_cached is not None:
-            upbit_statuses[upper] = upbit_cached
-        if bithumb_cached is not None:
-            bithumb_statuses[upper] = bithumb_cached
+    try:
+        upbit_statuses = fetch_upbit_transfer_statuses()
+    except Exception as err:  # noqa: BLE001
+        warnings.append(f"업비트 입출금 상태 조회 실패: {err}")
 
-    def crawl_one(upper: str) -> Tuple[str, Optional[TransferStatus], Optional[TransferStatus], Optional[str]]:
-        url = THEDDARI_SYMBOL_URL.format(symbol=upper)
-        try:
-            raw_html = fetch_text(url)
-            upbit_status, bithumb_status = parse_theddari_statuses_from_html(raw_html)
-            if not upbit_status and not bithumb_status:
-                return upper, None, None, f"더따리 크롤링 파싱 실패: {upper}"
-            return upper, upbit_status, bithumb_status, None
-        except Exception as err:  # noqa: BLE001
-            return upper, None, None, f"더따리 크롤링 실패({upper}): {err}"
-
-    if unresolved:
-        with ThreadPoolExecutor(max_workers=min(THEDDARI_CRAWL_WORKERS, len(unresolved))) as executor:
-            futures = [executor.submit(crawl_one, symbol) for symbol in unresolved]
-            for future in as_completed(futures):
-                symbol, upbit_status, bithumb_status, warning = future.result()
-                THEDDARI_STATUS_CACHE[symbol] = (upbit_status, bithumb_status)
-                if upbit_status is not None:
-                    upbit_statuses[symbol] = upbit_status
-                if bithumb_status is not None:
-                    bithumb_statuses[symbol] = bithumb_status
-                if warning:
-                    warnings.append(warning)
+    try:
+        bithumb_statuses = fetch_bithumb_transfer_statuses()
+    except Exception as err:  # noqa: BLE001
+        warnings.append(f"빗썸 입출금 상태 조회 실패: {err}")
 
     return upbit_statuses, bithumb_statuses, warnings
 
@@ -319,49 +247,11 @@ def fetch_transfer_statuses_with_fallback(
     Dict[str, str],
     Dict[str, str],
 ]:
-    warnings: List[str] = []
-    upbit_statuses: Optional[Dict[str, TransferStatus]] = None
-    bithumb_statuses: Optional[Dict[str, TransferStatus]] = None
-    upbit_sources: Dict[str, str] = {}
-    bithumb_sources: Dict[str, str] = {}
-
-    try:
-        upbit_statuses = fetch_upbit_transfer_statuses()
-        upbit_sources.update({symbol: "공식API" for symbol in upbit_statuses})
-    except Exception as err:  # noqa: BLE001
-        warnings.append(f"업비트 입출금 상태 조회 실패: {err}")
-
-    try:
-        bithumb_statuses = fetch_bithumb_transfer_statuses()
-        bithumb_sources.update({symbol: "공식API" for symbol in bithumb_statuses})
-    except Exception as err:  # noqa: BLE001
-        warnings.append(f"빗썸 입출금 상태 조회 실패: {err}")
-
-    unresolved_symbols = [
-        s.upper()
-        for s in symbols
-        if (upbit_statuses is None or s.upper() not in upbit_statuses)
-        or (bithumb_statuses is None or s.upper() not in bithumb_statuses)
-    ]
-    if unresolved_symbols:
-        c_up, c_bi, c_warnings = fetch_theddari_transfer_statuses(unresolved_symbols)
-        warnings.extend(c_warnings)
-        if c_up:
-            if upbit_statuses is None:
-                upbit_statuses = {}
-            for symbol, status in c_up.items():
-                if symbol not in upbit_statuses:
-                    upbit_statuses[symbol] = status
-                    upbit_sources[symbol] = "더따리크롤링"
-        if c_bi:
-            if bithumb_statuses is None:
-                bithumb_statuses = {}
-            for symbol, status in c_bi.items():
-                if symbol not in bithumb_statuses:
-                    bithumb_statuses[symbol] = status
-                    bithumb_sources[symbol] = "더따리크롤링"
-
+    upbit_statuses, bithumb_statuses, warnings = fetch_transfer_statuses_safe()
+    upbit_sources = {symbol: "공식API" for symbol in (upbit_statuses or {})}
+    bithumb_sources = {symbol: "공식API" for symbol in (bithumb_statuses or {})}
     return upbit_statuses, bithumb_statuses, warnings, upbit_sources, bithumb_sources
+
 
 def filter_restricted_coins(
     symbols: Sequence[str],

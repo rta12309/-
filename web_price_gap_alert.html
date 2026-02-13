@@ -56,103 +56,19 @@ const upbitWalletUrls=[
   'https://api.upbit.com/v1/status/wallet',
   'https://sg-api.upbit.com/v1/status/wallet',
   'https://id-api.upbit.com/v1/status/wallet',
-  'https://th-api.upbit.com/v1/status/wallet'
+  'https://th-api.upbit.com/v1/status/wallet',
+  'https://global-api.upbit.com/v1/status/wallet'
 ];
 const bithumbTickerUrl='https://api.bithumb.com/public/ticker/ALL_KRW';
 const bithumbAssetUrl='https://api.bithumb.com/public/assetsstatus/ALL';
-const theddariSymbolUrl=(symbol)=>`https://theddari.com/crypto/${symbol}`;
 
 let timerId = null;
 let isRunning = false;
-const theddariCache = new Map();
-const THEDDARI_CONCURRENCY = 8;
 
 const boolFlag=(v)=>['1','true','y','yes','working','normal','available'].includes(String(v).toLowerCase().trim());
 const chunk=(arr,size)=>{const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out;};
 const statusText=(x,source='-')=>!x ? `확인불가/확인불가 (${source})` : `${x.d?'가능':'불가'}/${x.w?'가능':'불가'} (${source})`;
 
-async function fetchText(url){
-  const r=await fetch(url);
-  if(!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.text();
-}
-
-function parseStatusToken(token){
-  const t=String(token).toLowerCase();
-  if(['가능','정상','working','normal'].includes(t)) return true;
-  if(['불가','점검','중지','suspend','suspended'].includes(t)) return false;
-  return null;
-}
-
-function extractFlagNear(text, key){
-  const patterns=[
-    new RegExp(`(?:${key})\\s*[:：\\-]?\\s*(가능|불가|점검|중지|정상|working|normal|suspend(?:ed)?)`,'i')
-  ];
-  for(const p of patterns){
-    const m=text.match(p);
-    if(m){
-      const v=parseStatusToken(m[1]);
-      if(v!==null) return v;
-    }
-  }
-  return null;
-}
-
-function parseTheddariHtml(raw){
-  const normalized=String(raw).replace(/\s+/g,' ');
-  const section=(keyword)=>{
-    const idx=normalized.indexOf(keyword);
-    if(idx<0) return '';
-    return normalized.slice(idx, Math.min(normalized.length, idx+360));
-  };
-  const read=(part)=>{
-    if(!part) return null;
-    const d=extractFlagNear(part,'입금|deposit');
-    const w=extractFlagNear(part,'출금|withdraw');
-    if(d===null || w===null) return null;
-    return {d,w};
-  };
-  return {up:read(section('업비트')), bi:read(section('빗썸'))};
-}
-
-async function fetchTheddariStatuses(symbols){
-  const warnings=[];
-  const up={};
-  const bi={};
-
-  const unresolved=[];
-  for(const raw of symbols){
-    const s=String(raw).toUpperCase();
-    if(theddariCache.has(s)){
-      const cached=theddariCache.get(s);
-      if(cached.up) up[s]=cached.up;
-      if(cached.bi) bi[s]=cached.bi;
-      continue;
-    }
-    unresolved.push(s);
-  }
-
-  async function crawlOne(s){
-    try{
-      const html=await fetchText(theddariSymbolUrl(s));
-      const parsed=parseTheddariHtml(html);
-      theddariCache.set(s, parsed);
-      if(parsed.up) up[s]=parsed.up;
-      if(parsed.bi) bi[s]=parsed.bi;
-      if(!parsed.up && !parsed.bi) warnings.push(`더따리 크롤링 파싱 실패: ${s}`);
-    }catch(e){
-      theddariCache.set(s, {up:null, bi:null});
-      warnings.push(`더따리 크롤링 실패(${s}): ${e.message}`);
-    }
-  }
-
-  for(let i=0;i<unresolved.length;i+=THEDDARI_CONCURRENCY){
-    const batch=unresolved.slice(i, i+THEDDARI_CONCURRENCY);
-    await Promise.all(batch.map(crawlOne));
-  }
-
-  return {up,bi,warnings};
-}
 
 
 async function jfetch(url){
@@ -195,24 +111,40 @@ async function fetchStatusesSafe(common){
   let up=null, bi=null;
   const upSrc={};
   const biSrc={};
+
+  const toUpbitFlag=(v)=>['working','normal','available','true','1'].includes(String(v).toLowerCase().trim());
+  const parseUpbit=(data)=>{
+    if(!Array.isArray(data)) return {};
+    const out={};
+    for(const it of data){
+      if(typeof it!=='object') continue;
+      const sym=(it.currency || it.currency_symbol || it.code || '').toUpperCase();
+      if(!sym) continue;
+      const dRaw = it.wallet_state ?? it.deposit_status ?? it.deposit_state ?? it.deposit ?? '';
+      const wRaw = it.block_state ?? it.withdraw_status ?? it.withdraw_state ?? it.withdrawal ?? '';
+      out[sym]={d:toUpbitFlag(dRaw), w:toUpbitFlag(wRaw)};
+    }
+    return out;
+  };
+
   {
     let ok=false;
     for(const url of upbitWalletUrls){
       try{
-        const data=await jfetch(url);
-        if(Array.isArray(data)){
-          up={};
-          for(const it of data){
-            const sym=(it.currency||'').toUpperCase();
-            up[sym]={
-              d:String(it.wallet_state).toLowerCase()==='working',
-              w:String(it.block_state).toLowerCase()==='normal'
-            };
-            upSrc[sym]='공식API';
-          }
+        const r=await fetch(url, {headers:{'Accept':'application/json','User-Agent':'Mozilla/5.0 price-gap-alert/1.0'}});
+        if(!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data=await r.json();
+        if(data && data.error){
+          throw new Error(JSON.stringify(data.error));
+        }
+        const parsed=parseUpbit(data);
+        if(Object.keys(parsed).length){
+          up=parsed;
+          for(const sym of Object.keys(up)) upSrc[sym]='공식API';
           ok=true;
           break;
         }
+        throw new Error('응답이 비어 있거나 형식이 다름');
       }catch(e){
         warnings.push(`업비트 입출금 상태 조회 실패(${url}): ${e.message}`);
       }
@@ -236,30 +168,6 @@ async function fetchStatusesSafe(common){
       biSrc[upper]='공식API';
     }
   }catch(e){warnings.push(`빗썸 입출금 상태 조회 실패: ${e.message}`);}
-
-  const unresolved=common.filter((s)=>!(up&&up[s]) || !(bi&&bi[s]));
-  if(unresolved.length){
-    const crawled=await fetchTheddariStatuses(unresolved);
-    warnings.push(...crawled.warnings);
-    if(Object.keys(crawled.up).length){
-      if(!up) up={};
-      for(const [sym,val] of Object.entries(crawled.up)){
-        if(!up[sym]){
-          up[sym]=val;
-          upSrc[sym]='더따리크롤링';
-        }
-      }
-    }
-    if(Object.keys(crawled.bi).length){
-      if(!bi) bi={};
-      for(const [sym,val] of Object.entries(crawled.bi)){
-        if(!bi[sym]){
-          bi[sym]=val;
-          biSrc[sym]='더따리크롤링';
-        }
-      }
-    }
-  }
 
   return {up,bi,warnings,upSrc,biSrc};
 }
