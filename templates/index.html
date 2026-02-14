@@ -36,8 +36,11 @@
     <hr />
     <div class="row">
       <label>업비트 티커(예: OM) <input id="tickerUpbit" type="text" value="OM"></label>
+      <label><input id="enableUpbit" type="checkbox" checked> 업비트 탐색 ON</label>
       <label>빗썸 티커(예: OM) <input id="tickerBithumb" type="text" value="OM"></label>
+      <label><input id="enableBithumb" type="checkbox" checked> 빗썸 탐색 ON</label>
       <label>바이낸스 티커(예: OM) <input id="tickerBinance" type="text" value="OM"></label>
+      <label><input id="enableBinance" type="checkbox" checked> 바이낸스 탐색 ON</label>
       <label>임계값(%) <input id="threshold" type="number" step="0.1" value="5"></label>
       <label>조회주기(초) <input id="interval" type="number" min="3" value="5"></label>
       <label>쿨다운(초) <input id="cooldown" type="number" min="10" value="300"></label>
@@ -146,6 +149,14 @@
       };
     }
 
+    function currentEnabled() {
+      return {
+        upbit: document.getElementById('enableUpbit').checked,
+        bithumb: document.getElementById('enableBithumb').checked,
+        binance: document.getElementById('enableBinance').checked,
+      };
+    }
+
     function syncTickerLabel(symbols) {
       document.querySelectorAll('.tickerUpbitText').forEach(el => { el.textContent = symbols.upbit; });
       document.querySelectorAll('.tickerBithumbText').forEach(el => { el.textContent = symbols.bithumb; });
@@ -199,17 +210,17 @@
       return null;
     }
 
-    async function getPrices(symbols) {
+    async function getPrices(symbols, enabled) {
       const upbitMarket = `KRW-${symbols.upbit}`;
       const bithumbMarket = `${symbols.bithumb}_KRW`;
       const binanceSymbol = `${symbols.binance}USDT`;
 
       const [upbitTicker, upbitUsdt, bithumb, binanceSpot, binanceFutures] = await Promise.all([
-        safeFetchJson(`https://api.upbit.com/v1/ticker?markets=${upbitMarket}`),
-        safeFetchJson('https://api.upbit.com/v1/ticker?markets=KRW-USDT'),
-        safeFetchJson(`https://api.bithumb.com/public/ticker/${bithumbMarket}`),
-        safeFetchJson(`https://api.binance.com/api/v3/ticker/price?symbol=${binanceSymbol}`),
-        safeFetchJson(`https://fapi.binance.com/fapi/v2/ticker/price?symbol=${binanceSymbol}`),
+        enabled.upbit ? safeFetchJson(`https://api.upbit.com/v1/ticker?markets=${upbitMarket}`) : Promise.resolve(null),
+        enabled.upbit ? safeFetchJson('https://api.upbit.com/v1/ticker?markets=KRW-USDT') : Promise.resolve(null),
+        enabled.bithumb ? safeFetchJson(`https://api.bithumb.com/public/ticker/${bithumbMarket}`) : Promise.resolve(null),
+        enabled.binance ? safeFetchJson(`https://api.binance.com/api/v3/ticker/price?symbol=${binanceSymbol}`) : Promise.resolve(null),
+        enabled.binance ? safeFetchJson(`https://fapi.binance.com/fapi/v2/ticker/price?symbol=${binanceSymbol}`) : Promise.resolve(null),
       ]);
 
       const result = {
@@ -221,11 +232,11 @@
         errors: [],
       };
 
-      if (result.upbitKrw === null) result.errors.push(`업비트 ${upbitMarket} 미지원/조회실패`);
-      if (result.usdtKrw === null) result.errors.push('업비트 KRW-USDT 조회실패');
-      if (result.bithumbKrw === null) result.errors.push(`빗썸 ${bithumbMarket} 미지원/조회실패`);
-      if (result.binanceSpotUsdt === null) result.errors.push(`바이낸스 현물 ${binanceSymbol} 미지원/조회실패`);
-      if (result.binanceFuturesUsdt === null) result.errors.push(`바이낸스 선물 ${binanceSymbol} 미지원/조회실패`);
+      if (enabled.upbit && result.upbitKrw === null) result.errors.push(`업비트 ${upbitMarket} 미지원/조회실패`);
+      if (enabled.upbit && result.usdtKrw === null) result.errors.push('업비트 KRW-USDT 조회실패');
+      if (enabled.bithumb && result.bithumbKrw === null) result.errors.push(`빗썸 ${bithumbMarket} 미지원/조회실패`);
+      if (enabled.binance && result.binanceSpotUsdt === null) result.errors.push(`바이낸스 현물 ${binanceSymbol} 미지원/조회실패`);
+      if (enabled.binance && result.binanceFuturesUsdt === null) result.errors.push(`바이낸스 선물 ${binanceSymbol} 미지원/조회실패`);
 
       return result;
     }
@@ -247,13 +258,14 @@
     async function tick() {
       try {
         const symbols = currentSymbols();
+        const enabled = currentEnabled();
         syncTickerLabel(symbols);
 
         const threshold = Number(document.getElementById('threshold').value || 5);
         const cooldownSec = Number(document.getElementById('cooldown').value || 300);
         const gapThreshold = Number(document.getElementById('gapThreshold').value || 2);
 
-        const p = await getPrices(symbols);
+        const p = await getPrices(symbols, enabled);
         const binanceSpotKrw = (p.binanceSpotUsdt !== null && p.usdtKrw !== null) ? (p.binanceSpotUsdt * p.usdtKrw) : null;
         const spotFuturesGap = (p.binanceSpotUsdt !== null && p.binanceFuturesUsdt !== null)
           ? diffPercent(p.binanceSpotUsdt, p.binanceFuturesUsdt)
