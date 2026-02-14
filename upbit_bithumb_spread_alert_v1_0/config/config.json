@@ -1,0 +1,13 @@
+{
+  "threshold_percent": 5,
+  "interval_seconds": 10,
+  "cooldown_seconds": 300,
+  "symbols_mode": "ALL",
+  "symbols_list": ["BTC", "ETH"],
+  "use_absolute_diff": true,
+  "notify_channels": ["desktop"],
+  "telegram_token": "",
+  "telegram_chat_id": "",
+  "enable_network_match": false,
+  "relaunch_on_config_change": false
+}
