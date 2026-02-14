@@ -259,7 +259,7 @@
       }
 
       async function getUpbitPrices() {
-        const markets = await fetchJSON("https://api.upbit.com/v1/market/all?isDetails=false");
+        const markets = await fetchJSON("/api/upbit/markets");
         const krwMarkets = markets.filter((item) => item.market.startsWith("KRW-"));
         const chunks = [];
         for (let i = 0; i < krwMarkets.length; i += 100) {
@@ -269,7 +269,7 @@
         const result = {};
         for (const chunk of chunks) {
           const marketParam = chunk.map((item) => item.market).join(",");
-          const tickers = await fetchJSON(`https://api.upbit.com/v1/ticker?markets=${marketParam}`);
+          const tickers = await fetchJSON(`/api/upbit/ticker?markets=${encodeURIComponent(marketParam)}`);
           for (const ticker of tickers) {
             const symbol = ticker.market.replace("KRW-", "");
             result[symbol] = Number(ticker.trade_price);
@@ -279,7 +279,7 @@
       }
 
       async function getBithumbPrices() {
-        const payload = await fetchJSON("https://api.bithumb.com/public/ticker/ALL_KRW");
+        const payload = await fetchJSON("/api/bithumb/ticker-all-krw");
         if (payload.status !== "0000") throw new Error("빗썸 가격 조회 실패");
         const result = {};
         for (const [symbol, info] of Object.entries(payload.data)) {
@@ -290,7 +290,7 @@
       }
 
       async function getUpbitWalletStatus() {
-        const payload = await fetchJSON("https://api.upbit.com/v1/status/wallet");
+        const payload = await fetchJSON("/api/upbit/wallet-status");
         const result = {};
         for (const item of payload) {
           const symbol = item.currency;
@@ -303,7 +303,7 @@
       }
 
       async function getBithumbWalletStatus() {
-        const payload = await fetchJSON("https://api.bithumb.com/public/assetsstatus/ALL");
+        const payload = await fetchJSON("/api/bithumb/assetsstatus-all");
         if (payload.status !== "0000") throw new Error("빗썸 입출금 조회 실패");
         const result = {};
         for (const [symbol, info] of Object.entries(payload.data)) {
@@ -320,14 +320,13 @@
         const chatId = elements.chatId.value.trim();
         if (!botToken || !chatId) return;
 
-        const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-        const response = await fetch(url, {
+        const response = await fetch("/api/telegram/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            chat_id: chatId,
+            botToken,
+            chatId,
             text,
-            disable_web_page_preview: true,
           }),
         });
 
@@ -465,6 +464,9 @@
       elements.testTelegram.addEventListener("click", testTelegram);
 
       loadSettings();
+      if (location.protocol === "file:") {
+        setStatus("브라우저에서 파일로 직접 열면 API 호출이 막힐 수 있습니다. python3 server.py 후 http://127.0.0.1:8000 으로 접속하세요.", "warn");
+      }
       runMonitor();
     </script>
   </body>
