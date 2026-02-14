@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>업비트-빗썸 가격차이 알림</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: "Pretendard", "Noto Sans KR", sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 1rem;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+      h1 {
+        margin-bottom: 0.25rem;
+      }
+      .subtitle {
+        color: #cbd5e1;
+        margin-bottom: 1rem;
+      }
+      .card {
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 0.75rem;
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 0.75rem;
+      }
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        font-size: 0.9rem;
+      }
+      input {
+        padding: 0.5rem;
+        border-radius: 0.5rem;
+        border: 1px solid #475569;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+      button {
+        cursor: pointer;
+        padding: 0.55rem 0.85rem;
+        border-radius: 0.6rem;
+        border: 1px solid #64748b;
+        color: #e2e8f0;
+        background: #334155;
+      }
+      button:hover {
+        background: #475569;
+      }
+      .row {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+      .status {
+        font-size: 0.9rem;
+        color: #93c5fd;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+      }
+      th,
+      td {
+        padding: 0.5rem;
+        border-bottom: 1px solid #334155;
+        text-align: left;
+      }
+      th {
+        background: #0f172a;
+        position: sticky;
+        top: 0;
+      }
+      .ok {
+        color: #86efac;
+      }
+      .bad {
+        color: #fca5a5;
+      }
+      .warn {
+        color: #fde047;
+      }
+      .table-wrap {
+        max-height: 520px;
+        overflow: auto;
+      }
+      code {
+        background: #0f172a;
+        padding: 0.1rem 0.4rem;
+        border-radius: 0.4rem;
+      }
+      .small {
+        font-size: 0.8rem;
+        color: #cbd5e1;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <h1>업비트 ↔ 빗썸 가격차이 모니터</h1>
+      <p class="subtitle">
+        모든 공통 코인의 KRW 가격 차이를 모니터링하고, 차이가 기준(기본 5%) 이상일 때 텔레그램 알림을 보냅니다.
+      </p>
+
+      <section class="card">
+        <h2>알림 설정</h2>
+        <div class="grid">
+          <label>
+            차이 임계치 (%)
+            <input id="threshold" type="number" min="0.1" step="0.1" value="5" />
+          </label>
+          <label>
+            조회 주기 (초)
+            <input id="interval" type="number" min="5" step="1" value="20" />
+          </label>
+          <label>
+            코인별 알림 쿨다운 (분)
+            <input id="cooldown" type="number" min="0" step="1" value="30" />
+          </label>
+          <label>
+            텔레그램 Bot Token
+            <input id="botToken" type="password" placeholder="123456:ABC..." />
+          </label>
+          <label>
+            텔레그램 Chat ID
+            <input id="chatId" type="text" placeholder="예: 123456789" />
+          </label>
+        </div>
+        <p class="small">
+          보안상 토큰/채팅 ID는 브라우저 <code>localStorage</code>에만 저장됩니다.
+        </p>
+        <div class="row" style="margin-top: 0.75rem">
+          <button id="saveSettings">설정 저장</button>
+          <button id="startBtn">모니터링 시작</button>
+          <button id="stopBtn">중지</button>
+          <button id="testTelegram">텔레그램 테스트</button>
+        </div>
+        <p id="appStatus" class="status">대기 중...</p>
+      </section>
+
+      <section class="card">
+        <h2>실시간 코인 상태</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>코인</th>
+                <th>업비트 가격(KRW)</th>
+                <th>빗썸 가격(KRW)</th>
+                <th>차이율(%)</th>
+                <th>업비트 입출금</th>
+                <th>빗썸 입출금</th>
+                <th>알림 가능 여부</th>
+                <th>마지막 알림</th>
+              </tr>
+            </thead>
+            <tbody id="coinRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const state = {
+        timer: null,
+        lastAlerts: {},
+      };
+
+      const elements = {
+        threshold: document.getElementById("threshold"),
+        interval: document.getElementById("interval"),
+        cooldown: document.getElementById("cooldown"),
+        botToken: document.getElementById("botToken"),
+        chatId: document.getElementById("chatId"),
+        appStatus: document.getElementById("appStatus"),
+        coinRows: document.getElementById("coinRows"),
+        saveSettings: document.getElementById("saveSettings"),
+        startBtn: document.getElementById("startBtn"),
+        stopBtn: document.getElementById("stopBtn"),
+        testTelegram: document.getElementById("testTelegram"),
+      };
+
+      function setStatus(text, type = "") {
+        elements.appStatus.textContent = text;
+        elements.appStatus.className = `status ${type}`;
+      }
+
+      function saveSettings() {
+        const payload = {
+          threshold: Number(elements.threshold.value || 5),
+          interval: Number(elements.interval.value || 20),
+          cooldown: Number(elements.cooldown.value || 30),
+          botToken: elements.botToken.value.trim(),
+          chatId: elements.chatId.value.trim(),
+        };
+        localStorage.setItem("priceGapSettings", JSON.stringify(payload));
+        setStatus("설정을 저장했습니다.", "ok");
+      }
+
+      function loadSettings() {
+        const raw = localStorage.getItem("priceGapSettings");
+        if (!raw) return;
+        try {
+          const parsed = JSON.parse(raw);
+          elements.threshold.value = parsed.threshold ?? 5;
+          elements.interval.value = parsed.interval ?? 20;
+          elements.cooldown.value = parsed.cooldown ?? 30;
+          elements.botToken.value = parsed.botToken ?? "";
+          elements.chatId.value = parsed.chatId ?? "";
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      async function fetchJSON(url) {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`${url} 요청 실패: ${response.status}`);
+        }
+        return response.json();
+      }
+
+      function formatNumber(value) {
+        if (value === null || value === undefined || Number.isNaN(value)) return "-";
+        return Number(value).toLocaleString("ko-KR", { maximumFractionDigits: 4 });
+      }
+
+      function isTransferEnabled(upbitStatus, bithumbStatus) {
+        if (!upbitStatus || !bithumbStatus) return false;
+        return upbitStatus.deposit && upbitStatus.withdraw && bithumbStatus.deposit && bithumbStatus.withdraw;
+      }
+
+      function statusText(status) {
+        if (!status) return "정보 없음";
+        return `${status.deposit ? "입금 O" : "입금 X"} / ${status.withdraw ? "출금 O" : "출금 X"}`;
+      }
+
+      function getDiffPercent(priceA, priceB) {
+        if (!priceA || !priceB) return null;
+        const low = Math.min(priceA, priceB);
+        const high = Math.max(priceA, priceB);
+        return ((high - low) / low) * 100;
+      }
+
+      async function getUpbitPrices() {
+        const markets = await fetchJSON("/api/upbit/markets");
+        const krwMarkets = markets.filter((item) => item.market.startsWith("KRW-"));
+        const chunks = [];
+        for (let i = 0; i < krwMarkets.length; i += 100) {
+          chunks.push(krwMarkets.slice(i, i + 100));
+        }
+
+        const result = {};
+        for (const chunk of chunks) {
+          const marketParam = chunk.map((item) => item.market).join(",");
+          const tickers = await fetchJSON(`/api/upbit/ticker?markets=${encodeURIComponent(marketParam)}`);
+          for (const ticker of tickers) {
+            const symbol = ticker.market.replace("KRW-", "");
+            result[symbol] = Number(ticker.trade_price);
+          }
+        }
+        return result;
+      }
+
+      async function getBithumbPrices() {
+        const payload = await fetchJSON("/api/bithumb/ticker-all-krw");
+        if (payload.status !== "0000") throw new Error("빗썸 가격 조회 실패");
+        const result = {};
+        for (const [symbol, info] of Object.entries(payload.data)) {
+          if (symbol === "date") continue;
+          result[symbol] = Number(info.closing_price);
+        }
+        return result;
+      }
+
+      async function getUpbitWalletStatus() {
+        const payload = await fetchJSON("/api/upbit/wallet-status");
+        const result = {};
+        for (const item of payload) {
+          const symbol = item.currency;
+          result[symbol] = {
+            deposit: item.wallet_state === "working",
+            withdraw: item.wallet_support?.includes("withdraw") ?? false,
+          };
+        }
+        return result;
+      }
+
+      async function getBithumbWalletStatus() {
+        const payload = await fetchJSON("/api/bithumb/assetsstatus-all");
+        if (payload.status !== "0000") throw new Error("빗썸 입출금 조회 실패");
+        const result = {};
+        for (const [symbol, info] of Object.entries(payload.data)) {
+          result[symbol.toUpperCase()] = {
+            deposit: info.deposit_status === "1",
+            withdraw: info.withdrawal_status === "1",
+          };
+        }
+        return result;
+      }
+
+      async function sendTelegramMessage(text) {
+        const botToken = elements.botToken.value.trim();
+        const chatId = elements.chatId.value.trim();
+        if (!botToken || !chatId) return;
+
+        const response = await fetch("/api/telegram/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            botToken,
+            chatId,
+            text,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`텔레그램 전송 실패 (${response.status})`);
+        }
+      }
+
+      function renderRows(records) {
+        elements.coinRows.innerHTML = "";
+        const fragment = document.createDocumentFragment();
+        for (const row of records) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${row.symbol}</td>
+            <td>${formatNumber(row.upbitPrice)}</td>
+            <td>${formatNumber(row.bithumbPrice)}</td>
+            <td class="${row.diffPercent >= Number(elements.threshold.value) ? "warn" : ""}">${row.diffPercent?.toFixed(2) ?? "-"}%</td>
+            <td class="${row.upbitTransfer ? "ok" : "bad"}">${statusText(row.upbitStatus)}</td>
+            <td class="${row.bithumbTransfer ? "ok" : "bad"}">${statusText(row.bithumbStatus)}</td>
+            <td class="${row.alertable ? "ok" : "bad"}">${row.alertable ? "가능" : "차단"}</td>
+            <td>${row.lastAlert || "-"}</td>
+          `;
+          fragment.appendChild(tr);
+        }
+        elements.coinRows.appendChild(fragment);
+      }
+
+      async function runMonitor() {
+        try {
+          setStatus("데이터 조회 중...");
+          const [upbitPrices, bithumbPrices, upbitWallet, bithumbWallet] = await Promise.all([
+            getUpbitPrices(),
+            getBithumbPrices(),
+            getUpbitWalletStatus(),
+            getBithumbWalletStatus(),
+          ]);
+
+          const symbols = Object.keys(upbitPrices).filter((symbol) => symbol in bithumbPrices);
+          const threshold = Number(elements.threshold.value || 5);
+          const cooldownMinutes = Number(elements.cooldown.value || 30);
+          const now = Date.now();
+
+          const rows = symbols
+            .map((symbol) => {
+              const upbitStatus = upbitWallet[symbol];
+              const bithumbStatus = bithumbWallet[symbol];
+              const upbitTransfer = !!(upbitStatus && upbitStatus.deposit && upbitStatus.withdraw);
+              const bithumbTransfer = !!(bithumbStatus && bithumbStatus.deposit && bithumbStatus.withdraw);
+              const alertable = isTransferEnabled(upbitStatus, bithumbStatus);
+              const diffPercent = getDiffPercent(upbitPrices[symbol], bithumbPrices[symbol]);
+              const lastAlertTime = state.lastAlerts[symbol] ? new Date(state.lastAlerts[symbol]).toLocaleString("ko-KR") : "";
+
+              return {
+                symbol,
+                upbitPrice: upbitPrices[symbol],
+                bithumbPrice: bithumbPrices[symbol],
+                diffPercent,
+                upbitStatus,
+                bithumbStatus,
+                upbitTransfer,
+                bithumbTransfer,
+                alertable,
+                lastAlert: lastAlertTime,
+              };
+            })
+            .sort((a, b) => (b.diffPercent ?? 0) - (a.diffPercent ?? 0));
+
+          renderRows(rows);
+
+          for (const row of rows) {
+            const overThreshold = row.diffPercent !== null && row.diffPercent >= threshold;
+            if (!overThreshold || !row.alertable) continue;
+
+            const cooldownMs = cooldownMinutes * 60 * 1000;
+            const lastAlert = state.lastAlerts[row.symbol] ?? 0;
+            if (now - lastAlert < cooldownMs) continue;
+
+            const moreExpensive = row.upbitPrice > row.bithumbPrice ? "업비트" : "빗썸";
+            const message = [
+              `🚨 [김프 알림] ${row.symbol}`,
+              `- 차이율: ${row.diffPercent.toFixed(2)}% (기준 ${threshold}%)`,
+              `- 업비트: ${formatNumber(row.upbitPrice)} KRW`,
+              `- 빗썸: ${formatNumber(row.bithumbPrice)} KRW`,
+              `- 더 비싼 거래소: ${moreExpensive}`,
+              `- 입출금: 업비트(${statusText(row.upbitStatus)}), 빗썸(${statusText(row.bithumbStatus)})`,
+            ].join("\n");
+
+            try {
+              await sendTelegramMessage(message);
+              state.lastAlerts[row.symbol] = now;
+            } catch (telegramError) {
+              console.error(telegramError);
+            }
+          }
+
+          setStatus(`모니터링 중... ${new Date().toLocaleTimeString("ko-KR")} 업데이트`, "ok");
+        } catch (error) {
+          console.error(error);
+          setStatus(`오류: ${error.message}`, "bad");
+        }
+      }
+
+      function startMonitoring() {
+        stopMonitoring();
+        const sec = Math.max(5, Number(elements.interval.value || 20));
+        runMonitor();
+        state.timer = setInterval(runMonitor, sec * 1000);
+        setStatus(`모니터링 시작 (${sec}초 간격)`, "ok");
+      }
+
+      function stopMonitoring() {
+        if (state.timer) {
+          clearInterval(state.timer);
+          state.timer = null;
+        }
+        setStatus("모니터링 중지", "warn");
+      }
+
+      async function testTelegram() {
+        try {
+          await sendTelegramMessage("✅ 업비트/빗썸 가격차이 알림 봇 테스트 메시지입니다.");
+          setStatus("텔레그램 테스트 메시지 전송 성공", "ok");
+        } catch (error) {
+          setStatus(`텔레그램 테스트 실패: ${error.message}`, "bad");
+        }
+      }
+
+      elements.saveSettings.addEventListener("click", saveSettings);
+      elements.startBtn.addEventListener("click", () => {
+        saveSettings();
+        startMonitoring();
+      });
+      elements.stopBtn.addEventListener("click", stopMonitoring);
+      elements.testTelegram.addEventListener("click", testTelegram);
+
+      loadSettings();
+      if (location.protocol === "file:") {
+        setStatus("브라우저에서 파일로 직접 열면 API 호출이 막힐 수 있습니다. python3 server.py 후 http://127.0.0.1:8000 으로 접속하세요.", "warn");
+      }
+      runMonitor();
+    </script>
+  </body>
+</html>
