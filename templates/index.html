@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>업비트/빗썸 가격 차이 알림기</title>
+    <style>
+      body { font-family: Arial, sans-serif; background: #f6f7fb; margin: 0; }
+      .wrap { max-width: 760px; margin: 40px auto; background: #fff; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.08); padding: 24px; }
+      h1 { margin-top: 0; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .card { background: #f2f5ff; border-radius: 12px; padding: 16px; }
+      .label { color: #666; font-size: 13px; }
+      .value { font-size: 26px; font-weight: 700; }
+      .alert { margin-top: 16px; padding: 12px; border-radius: 10px; font-weight: 700; }
+      .ok { background: #e7f7ec; color: #11662d; }
+      .danger { background: #ffebee; color: #a30000; }
+      .meta { color: #666; font-size: 13px; margin-top: 12px; }
+      .error { background: #fff2cc; color: #5f4900; padding: 10px; border-radius: 8px; margin-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>업비트 ↔ 빗썸 가격 차이 모니터</h1>
+      <p>기준 코인: <strong>{{ config.symbol }}</strong> | 알림 기준: <strong>{{ config.threshold_percent }}%</strong></p>
+
+      <div class="grid">
+        <div class="card">
+          <div class="label">업비트 가격 (KRW)</div>
+          <div id="upbit" class="value">-</div>
+        </div>
+        <div class="card">
+          <div class="label">빗썸 가격 (KRW)</div>
+          <div id="bithumb" class="value">-</div>
+        </div>
+      </div>
+
+      <div id="alertBox" class="alert ok">데이터 수집 중...</div>
+      <div class="meta">
+        가격 차이: <span id="diff">-</span>%<br />
+        최근 체크: <span id="checkedAt">-</span><br />
+        누적 알림 횟수: <span id="alertCount">0</span>
+      </div>
+      <div id="error" class="error" style="display: none"></div>
+    </div>
+
+    <script>
+      let lastAlertCount = 0;
+
+      function formatKRW(num) {
+        if (num === null || num === undefined) return "-";
+        return Number(num).toLocaleString("ko-KR");
+      }
+
+      function beep() {
+        const context = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.value = 1000;
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start();
+        gain.gain.exponentialRampToValueAtTime(0.00001, context.currentTime + 0.3);
+        setTimeout(() => oscillator.stop(), 300);
+      }
+
+      async function refreshStatus() {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+
+        document.getElementById('upbit').textContent = formatKRW(data.upbit_price);
+        document.getElementById('bithumb').textContent = formatKRW(data.bithumb_price);
+        document.getElementById('diff').textContent = data.difference_percent !== null ? Number(data.difference_percent).toFixed(3) : '-';
+        document.getElementById('checkedAt').textContent = data.checked_at || '-';
+        document.getElementById('alertCount').textContent = data.alert_count;
+
+        const alertBox = document.getElementById('alertBox');
+        const errorBox = document.getElementById('error');
+
+        if (data.status === 'error') {
+          errorBox.style.display = 'block';
+          errorBox.textContent = `에러: ${data.last_error}`;
+        } else {
+          errorBox.style.display = 'none';
+        }
+
+        if (data.is_alert) {
+          alertBox.className = 'alert danger';
+          alertBox.textContent = `⚠️ 가격 차이가 ${Math.abs(data.difference_percent).toFixed(3)}% 입니다! (기준 ${data.threshold_percent}%)`;
+
+          if (data.alert_count > lastAlertCount) {
+            beep();
+            alert('가격 차이가 기준치를 넘었습니다!');
+            lastAlertCount = data.alert_count;
+          }
+        } else {
+          alertBox.className = 'alert ok';
+          alertBox.textContent = '정상 범위입니다.';
+          lastAlertCount = data.alert_count;
+        }
+      }
+
+      refreshStatus();
+      setInterval(refreshStatus, 5000);
+    </script>
+  </body>
+</html>
