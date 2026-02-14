@@ -6,6 +6,33 @@
 
 ---
 
+## 실행 환경 권장사항
+
+- **권장 Python 버전: 3.11 / 3.12**
+- **Python 3.14는 현재 패키지 호환성 이슈 가능성으로 비권장**
+- Windows 10/11 권장
+
+### 터미널에서 프로젝트 폴더 여는 방법 (Windows)
+
+1. 파일 탐색기에서 `upbit_bithumb_spread_alert_v1_0` 폴더로 이동
+2. 주소창을 클릭하고 `cmd` 입력 후 Enter
+3. 해당 경로로 열린 터미널에서 아래 파일을 실행 가능
+   - `scripts\run.bat`
+   - `scripts\build_release.bat`
+   - `scripts\publish_exe.bat`
+
+### 원클릭 배포 절차 (EXE 만들기)
+
+1. `scripts\publish_exe.bat` 더블클릭
+2. 스크립트가 자동으로:
+   - `.venv` 생성(없을 때만)
+   - pip/requirements/PyInstaller 설치
+   - 단일 EXE 빌드
+3. 완료 후 `dist\SpreadAlert_v1.0.exe` 생성 확인
+4. **오류가 있으면 즉시 중단되며 SUCCESS 문구가 나오지 않습니다**
+
+---
+
 ## 1) 그냥 실행 (배포 EXE 더블클릭)
 
 1. `dist/SpreadAlert_v1.0.exe` 파일을 더블클릭합니다.
