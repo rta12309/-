@@ -272,10 +272,13 @@ def filter_restricted_coins(
     if upbit_statuses is None or bithumb_statuses is None:
         return tradable, []
 
-    default_status = TransferStatus(deposit_enabled=False, withdraw_enabled=False)
     for symbol in symbols:
-        upbit = upbit_statuses.get(symbol, default_status)
-        bithumb = bithumb_statuses.get(symbol, default_status)
+        upbit = upbit_statuses.get(symbol)
+        bithumb = bithumb_statuses.get(symbol)
+        if upbit is None or bithumb is None:
+            # 한쪽 거래소의 상태를 모르는 경우에는 제한 코인으로 단정하지 않는다.
+            continue
+
         enabled_all = all(
             [
                 upbit.deposit_enabled,
