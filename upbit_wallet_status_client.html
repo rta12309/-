@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>업비트 공지 기반 입출금 상태 조회</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 1000px; margin: 24px auto; padding: 0 12px; }
+    input { padding: 8px; width: 100%; box-sizing: border-box; }
+    button { padding: 10px 14px; cursor: pointer; margin-right: 8px; margin-top: 8px; }
+    .status { margin-top: 10px; color: #333; }
+    .error { color: #c62828; white-space: pre-wrap; }
+    .ok { color: #2e7d32; }
+    .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #ddd; padding: 8px; font-size: 13px; vertical-align: top; }
+    th { background: #f5f5f5; }
+  </style>
+</head>
+<body>
+  <h2>업비트 공지 파싱 입출금 상태 조회</h2>
+  <p>업비트 API 대신 공지 파싱으로 상태를 추정합니다. (빗썸은 기존 방식 유지)</p>
+
+  <div class="card">
+    <label>조회 티커 목록 (쉼표 구분)</label>
+    <input id="symbols" type="text" value="BTC,ETH,XRP,SOL,FLOW" />
+
+    <div>
+      <button id="healthBtn">서버 상태 확인(/health)</button>
+      <button id="loadBtn">입출금 상태 조회</button>
+    </div>
+
+    <p id="health" class="status">헬스체크 미실행</p>
+    <p id="status" class="status">대기 중</p>
+    <p id="warning" class="status"></p>
+    <p id="error" class="error"></p>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>코인</th>
+        <th>입금 가능</th>
+        <th>출금 가능</th>
+        <th>근거 공지</th>
+      </tr>
+    </thead>
+    <tbody id="resultBody"></tbody>
+  </table>
+
+  <script>
+    const symbolsEl = document.getElementById('symbols');
+    const healthBtn = document.getElementById('healthBtn');
+    const loadBtn = document.getElementById('loadBtn');
+    const healthEl = document.getElementById('health');
+    const statusEl = document.getElementById('status');
+    const warningEl = document.getElementById('warning');
+    const errorEl = document.getElementById('error');
+    const resultBody = document.getElementById('resultBody');
+
+    function showError(text) { errorEl.textContent = text; }
+
+    async function checkHealth() {
+      healthEl.textContent = '헬스체크 중...';
+      healthEl.className = 'status';
+      try {
+        const res = await fetch('/health');
+        const json = await res.json();
+        healthEl.textContent = `health: HTTP ${res.status} / ${JSON.stringify(json)}`;
+        if (json.ok === true) healthEl.className = 'status ok';
+      } catch (err) {
+        healthEl.textContent = `health 실패: ${err.message}`;
+        healthEl.className = 'status error';
+      }
+    }
+
+    async function loadWalletStatus() {
+      statusEl.textContent = '조회 중...';
+      warningEl.textContent = '';
+      showError('');
+      resultBody.innerHTML = '';
+
+      const symbols = symbolsEl.value.trim();
+      try {
+        const url = `/api/upbit_wallet_status?symbols=${encodeURIComponent(symbols)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (!res.ok || data.error) {
+          statusEl.textContent = '실패';
+          showError(`응답: HTTP ${res.status} / ${JSON.stringify(data)}`);
+          return;
+        }
+
+        const rows = Array.isArray(data.data) ? data.data : [];
+        for (const item of rows) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${item.symbol ?? '-'}</td>
+            <td>${item.deposit_enabled ? '가능' : '불가'}</td>
+            <td>${item.withdraw_enabled ? '가능' : '불가'}</td>
+            <td>${item.matched_notice ?? '-'}</td>
+          `;
+          resultBody.appendChild(tr);
+        }
+
+        warningEl.textContent = (data.warnings || []).join(' | ');
+        statusEl.textContent = `완료: ${rows.length}개 (출처: ${data.source || '-'})`;
+      } catch (err) {
+        statusEl.textContent = '실패';
+        showError(`fetch 예외: ${err.message}`);
+      }
+    }
+
+    healthBtn.addEventListener('click', checkHealth);
+    loadBtn.addEventListener('click', loadWalletStatus);
+
+    checkHealth();
+  </script>
+</body>
+</html>

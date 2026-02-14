@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>업비트-빗썸 가격차이 웹 모니터</title>
+  <style>
+    body{font-family:Arial,sans-serif;max-width:1100px;margin:20px auto;padding:0 12px}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+    input,button{padding:8px}
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    th,td{border:1px solid #ddd;padding:6px;font-size:13px}
+    th{background:#f5f5f5}
+    .warn{color:#b35a00;white-space:pre-wrap}
+    .muted{color:#666}
+    .status-wrap{display:flex;align-items:center;gap:8px;min-height:24px}
+    .spinner{width:14px;height:14px;border:2px solid #ddd;border-top-color:#2b6df8;border-radius:50%;display:none;animation:spin 0.8s linear infinite}
+    .spinner.show{display:inline-block}
+    @keyframes spin{to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+  <h2>업비트-빗썸 가격차이 웹 모니터</h2>
+  <p class="muted">설치 없이 브라우저에서 자동 탐색 + 텔레그램 알림</p>
+
+  <div class="row">
+    <label>기준(%): <input id="threshold" type="number" value="5" step="0.1" /></label>
+    <label>간격(초): <input id="interval" type="number" value="10" min="1" /></label>
+    <label>제외 티커: <input id="excludeSymbols" type="text" value="" placeholder="예: BTC,ETH" /></label>
+    <button id="runBtn">지금 1회 조회</button>
+    <button id="startBtn">자동 시작</button>
+    <button id="stopBtn" disabled>자동 중지</button>
+  </div>
+
+  <div class="row">
+    <label>텔레그램 봇 토큰: <input id="tgToken" type="text" size="34" placeholder="123456:ABC..." /></label>
+    <label>텔레그램 챗 ID: <input id="tgChatId" type="text" size="18" placeholder="예: 123456789" /></label>
+    <button id="testTelegramBtn">텔레그램 테스트</button>
+  </div>
+
+  <div class="status-wrap"><span id="loadingIcon" class="spinner" aria-label="loading"></span><p id="status"></p></div>
+  <p id="warnings" class="warn"></p>
+
+  <h3>입출금 제한 코인(참고 표시, 알림은 계속)</h3>
+  <div id="restricted" class="muted">-</div>
+
+  <h3>알림 대상 결과</h3>
+  <table>
+    <thead><tr><th>코인</th><th>갭%</th><th>업비트</th><th>빗썸</th><th>업비트 입/출금(출처)</th><th>빗썸 입/출금(출처)</th></tr></thead>
+    <tbody id="resultBody"></tbody>
+  </table>
+
+<script>
+const upbitMarketsUrl='https://api.upbit.com/v1/market/all?isDetails=false';
+const upbitTickerUrl=(markets)=>`https://api.upbit.com/v1/ticker?markets=${markets}`;
+const upbitNoticeUrls=[
+  "https://api-manager.upbit.com/api/v1/notices?page=1&per_page=100",
+  "https://api-manager.upbit.com/api/v1/notices?page=1&per_page=100&thread_name=notice"
+];
+const bithumbTickerUrl='https://api.bithumb.com/public/ticker/ALL_KRW';
+const bithumbAssetUrl='https://api.bithumb.com/public/assetsstatus/ALL';
+
+let timerId = null;
+let isRunning = false;
+
+const boolFlag=(v)=>['1','true','y','yes','working','normal','available'].includes(String(v).toLowerCase().trim());
+const chunk=(arr,size)=>{const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out;};
+const statusText=(x,source='-')=>!x ? `확인불가/확인불가 (${source})` : `${x.d?'가능':'불가'}/${x.w?'가능':'불가'} (${source})`;
+
+
+
+async function jfetch(url){
+  const r=await fetch(url);
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+async function fetchUpbitSymbols(){
+  const data=await jfetch(upbitMarketsUrl);
+  return data.filter(x=>x.market?.startsWith('KRW-')).map(x=>x.market.split('-')[1]);
+}
+
+async function fetchUpbitPrices(symbols){
+  const result={};
+  for(const part of chunk(symbols,100)){
+    const markets=part.map(s=>`KRW-${s}`).join(',');
+    const data=await jfetch(upbitTickerUrl(markets));
+    for(const item of data){
+      const m=item.market||'';
+      if(m.startsWith('KRW-') && typeof item.trade_price==='number') result[m.split('-')[1]]=item.trade_price;
+    }
+  }
+  return result;
+}
+
+async function fetchBithumbPrices(){
+  const data=await jfetch(bithumbTickerUrl);
+  if(data.status!=='0000') throw new Error('빗썸 티커 실패');
+  const out={};
+  for(const [sym,info] of Object.entries(data.data||{})){
+    if(sym==='date' || typeof info!=='object') continue;
+    out[sym]=Number(info.closing_price);
+  }
+  return out;
+}
+
+async function fetchStatusesSafe(common){
+  const warnings=[];
+  let up={};
+  let bi=null;
+  const upSrc={};
+  const biSrc={};
+
+  function statusFromNoticeTexts(symbol, texts){
+    let d=null, w=null;
+    const sym=String(symbol||'').toUpperCase();
+
+    for(const raw of texts){
+      const t=String(raw||'').toUpperCase();
+      const mention=new RegExp(`(^|[^A-Z0-9])${sym}([^A-Z0-9]|$)`).test(t);
+      if(!mention) continue;
+
+      if(t.includes('입출금') && t.includes('중단')){ d=false; w=false; break; }
+      if(t.includes('입금') && t.includes('중단')) d=false;
+      if(t.includes('출금') && t.includes('중단')) w=false;
+
+      if(t.includes('입출금') && (t.includes('재개') || t.includes('정상화'))){ d=true; w=true; break; }
+      if(t.includes('입금') && (t.includes('재개') || t.includes('정상화')) ) d=true;
+      if(t.includes('출금') && (t.includes('재개') || t.includes('정상화')) ) w=true;
+    }
+
+    if(d===null && w===null) return null;
+    return {d:d===null?true:d, w:w===null?true:w};
+  }
+
+  let noticeTexts=[];
+  for(const url of upbitNoticeUrls){
+    try{
+      const data=await jfetch(url);
+      if(Array.isArray(data)){
+        noticeTexts=data.map(it=>`${it?.title||''} ${it?.body||''} ${it?.summary||''}`);
+        if(noticeTexts.length) break;
+      }
+    }catch(e){
+      warnings.push(`업비트 공지 파싱 실패(${url}): ${e.message}`);
+    }
+  }
+
+  for(const sym of common){
+    const st=statusFromNoticeTexts(sym, noticeTexts);
+    if(st){
+      up[sym]=st;
+      upSrc[sym]='업비트공지';
+    }
+  }
+
+  try{
+    const data=await jfetch(bithumbAssetUrl);
+    if(data.status!=='0000') throw new Error('응답실패');
+    bi={};
+    for(const [sym,info] of Object.entries(data.data||{})){
+      if(typeof info!=='object') continue;
+      const upper=sym.toUpperCase();
+      bi[upper]={
+        d:boolFlag(info.deposit_status ?? info.deposit ?? info.depositState ?? ''),
+        w:boolFlag(info.withdrawal_status ?? info.withdrawal ?? info.withdrawState ?? '')
+      };
+      biSrc[upper]='공식API';
+    }
+  }catch(e){warnings.push(`빗썸 입출금 상태 조회 실패: ${e.message}`);}
+
+  if(Object.keys(up).length===0){
+    up=null;
+    warnings.push('업비트 공지에서 입출금 상태를 찾지 못했습니다.');
+  }
+
+  return {up,bi,warnings,upSrc,biSrc};
+}
+
+function filterCoins(common,up,bi){
+  const tradable=[...common];
+  if(!up || !bi) return {tradable,restricted:[]};
+  const restricted=[];
+  for(const s of common){
+    const u=up[s]||{d:false,w:false};
+    const b=bi[s]||{d:false,w:false};
+    if(!(u.d&&u.w&&b.d&&b.w)) restricted.push({s,u,b});
+  }
+  return {tradable,restricted};
+}
+
+async function sendTelegramMessage(text){
+  const token=document.getElementById('tgToken').value.trim();
+  const chatId=document.getElementById('tgChatId').value.trim();
+  if(!token || !chatId){
+    return {ok:false, message:'텔레그램 토큰/챗ID를 입력해 주세요.'};
+  }
+  const url=`https://api.telegram.org/bot${token}/sendMessage`;
+  try{
+    const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId,text})});
+    const data=await res.json();
+    if(!res.ok || !data.ok){
+      return {ok:false, message:`텔레그램 전송 실패: ${data.description || res.status}`};
+    }
+    return {ok:true, message:'텔레그램 전송 성공'};
+  }catch(e){
+    return {ok:false, message:`텔레그램 전송 오류: ${e.message}`};
+  }
+}
+
+
+function setLoading(isLoading){
+  const icon=document.getElementById('loadingIcon');
+  if(!icon) return;
+  icon.classList.toggle('show', isLoading);
+}
+
+async function run(){
+  if(isRunning){
+    return;
+  }
+  isRunning = true;
+  setLoading(true);
+  const now = new Date().toLocaleString();
+  const t=Number(document.getElementById('threshold').value||5);
+  const status=document.getElementById('status');
+  const warningsEl=document.getElementById('warnings');
+  const restrictedEl=document.getElementById('restricted');
+  const body=document.getElementById('resultBody');
+  body.innerHTML='';
+  status.textContent='조회 중...';
+  warningsEl.textContent='';
+  restrictedEl.textContent='-';
+
+  try{
+    const symbols=await fetchUpbitSymbols();
+    const [upPrices,biPrices]=await Promise.all([fetchUpbitPrices(symbols),fetchBithumbPrices()]);
+    const common=Object.keys(upPrices).filter(s=>biPrices[s]!=null).sort();
+    const statuses=await fetchStatusesSafe(common);
+    const {tradable,restricted}=filterCoins(common,statuses.up,statuses.bi);
+    const excluded=new Set(String(document.getElementById("excludeSymbols").value||"").split(",").map(x=>x.trim().toUpperCase()).filter(Boolean));
+    const alertSymbols=tradable.filter(s=>!excluded.has(s));
+
+    warningsEl.textContent=statuses.warnings.join(' | ');
+    if(restricted.length){
+      restrictedEl.innerHTML=restricted.slice(0,20).map(x=>`- ${x.s}: 업비트 ${statusText(x.u,statuses.upSrc?.[x.s]||'-')}, 빗썸 ${statusText(x.b,statuses.biSrc?.[x.s]||'-')}`).join('<br/>');
+      if(restricted.length>20) restrictedEl.innerHTML += `<br/>... 외 ${restricted.length-20}개`;
+    } else restrictedEl.textContent='없음';
+
+    const rows=[];
+    for(const s of alertSymbols){
+      const u=upPrices[s], b=biPrices[s];
+      if(!b||b<=0) continue;
+      const gap=Math.abs(u-b)/b*100;
+      if(gap>=t) rows.push({s,gap,u,b,upStatus:statuses.up?.[s]||null,biStatus:statuses.bi?.[s]||null});
+    }
+    rows.sort((a,b)=>b.gap-a.gap);
+
+    for(const r of rows){
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${r.s}</td><td>${r.gap.toFixed(2)}%</td><td>${r.u.toLocaleString()}</td><td>${r.b.toLocaleString()}</td><td>${statusText(r.upStatus, statuses.upSrc?.[r.s]||'-')}</td><td>${statusText(r.biStatus, statuses.biSrc?.[r.s]||'-')}</td>`;
+      body.appendChild(tr);
+    }
+
+    if(rows.length>0){
+      const message = `[가격차이 알림] ${now}\n기준 ${t}% 이상 ${rows.length}개\n` + rows.slice(0,10).map(r=>`${r.s} ${r.gap.toFixed(2)}% (업:${r.u}, 빗:${r.b})`).join('\n');
+      const tg = await sendTelegramMessage(message);
+      if(!tg.ok){
+        warningsEl.textContent = (warningsEl.textContent ? warningsEl.textContent + ' | ' : '') + tg.message;
+      }
+    }
+
+    if(rows.length>0){
+      try{ alert(`가격차이 ${rows.length}개 감지`); } catch(_){}
+    }
+
+    status.textContent=`완료: 공통 ${common.length}개 / 알림대상 ${alertSymbols.length}개 / 제외티커 ${excluded.size}개 / 기준초과 ${rows.length}개`;
+  }catch(e){
+    status.textContent='실패';
+    warningsEl.textContent=String(e);
+  } finally {
+    isRunning = false;
+    setLoading(false);
+  }
+}
+
+function startAuto(){
+  const intervalSec = Number(document.getElementById('interval').value || 10);
+  if(intervalSec <= 0){
+    document.getElementById('warnings').textContent = '간격(초)은 1 이상이어야 합니다.';
+    return;
+  }
+  if(timerId){ clearInterval(timerId); }
+  timerId = setInterval(run, intervalSec * 1000);
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+  run();
+}
+
+function stopAuto(){
+  if(timerId){ clearInterval(timerId); timerId = null; }
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+}
+
+async function testTelegram(){
+  const now = new Date().toLocaleString();
+  const result = await sendTelegramMessage(`[테스트] 텔레그램 알림 테스트 성공 ${now}`);
+  document.getElementById('warnings').textContent = result.message;
+}
+
+document.getElementById('runBtn').addEventListener('click',run);
+document.getElementById('startBtn').addEventListener('click',startAuto);
+document.getElementById('stopBtn').addEventListener('click',stopAuto);
+document.getElementById('testTelegramBtn').addEventListener('click',testTelegram);
+</script>
+</body>
+</html>
