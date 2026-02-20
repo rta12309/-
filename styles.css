@@ -1,0 +1,152 @@
+:root {
+  color-scheme: light;
+  --bg: #f6f8fb;
+  --card: #ffffff;
+  --border: #d8deea;
+  --text: #19212e;
+  --muted: #566176;
+  --primary: #3156f5;
+  --danger: #c62828;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.container {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+header h1 {
+  margin: 0;
+}
+
+header p {
+  color: var(--muted);
+}
+
+.fx-panel,
+.group-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.group-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.group-name {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 15px;
+}
+
+.group-header-actions,
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: white;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.wallet-controls {
+  margin: 10px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.wallet-row {
+  display: grid;
+  grid-template-columns: 220px 1fr auto;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.wallet-row input,
+.wallet-row select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px;
+}
+
+.remove-group-btn,
+.remove-wallet-btn {
+  color: var(--danger);
+}
+
+.group-summary {
+  margin: 12px 0;
+  padding: 10px;
+  background: #f2f5ff;
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wallet-result {
+  border-top: 1px solid var(--border);
+  padding: 10px 0;
+}
+
+.wallet-result h4 {
+  margin: 6px 0;
+}
+
+.wallet-result table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.wallet-result th,
+.wallet-result td {
+  border-bottom: 1px solid var(--border);
+  padding: 6px;
+  text-align: left;
+  font-size: 14px;
+}
+
+.empty-msg {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.error {
+  color: var(--danger);
+}
+
+@media (max-width: 860px) {
+  .wallet-row {
+    grid-template-columns: 1fr;
+  }
+}
