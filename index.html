@@ -37,9 +37,10 @@
       <button id="addGroup">+ 그룹 추가</button>
       <button id="refreshAll" class="subtle">전체 새로고침</button>
       <label class="muted">자동 새로고침(초)
-        <input id="autoRefreshSec" type="number" min="0" value="0" style="width:90px; margin-left:6px;" />
+        <input id="autoRefreshSec" type="number" min="1" value="600" style="width:90px; margin-left:6px;" />
       </label>
-      <button id="applyAutoRefresh" class="subtle">적용</button>
+      <label class="muted"><input id="autoRefreshEnabled" type="checkbox" checked /> ON/OFF</label>
+      <button id="applyAutoRefresh" class="subtle">자동 새로고침 적용</button>
       <span id="fx" class="status">환율 로딩중...</span>
     </div>
     <p class="muted">EVM 체인은 각 스캔 API 응답 기준(토큰 홀딩 목록)으로 불러옵니다. 일부 체인은 스캔 정책(CORS/API 제한)에 따라 브라우저에서 조회가 제한될 수 있습니다.</p>
@@ -65,6 +66,7 @@ const STORAGE_KEY = 'wallet-group-viewer-v1';
 let state = loadState();
 let usdtKrw = 0;
 let autoRefreshTimer = null;
+let refreshInProgress = false;
 
 function loadState() {
   try {
@@ -230,25 +232,40 @@ function calcTotalUsd(tokens) {
 }
 
 async function refreshAllWallets() {
-  await loadFx();
-  for (let gi=0; gi<state.groups.length; gi++) {
-    for (let wi=0; wi<state.groups[gi].wallets.length; wi++) {
-      if (isValidAddress(state.groups[gi].wallets[wi].chain, state.groups[gi].wallets[wi].address)) {
-        await loadWallet(gi, wi);
+  if (refreshInProgress) return;
+  refreshInProgress = true;
+  try {
+    await loadFx();
+    for (let gi=0; gi<state.groups.length; gi++) {
+      for (let wi=0; wi<state.groups[gi].wallets.length; wi++) {
+        if (isValidAddress(state.groups[gi].wallets[wi].chain, state.groups[gi].wallets[wi].address)) {
+          await loadWallet(gi, wi);
+        }
       }
     }
+  } finally {
+    refreshInProgress = false;
   }
 }
 
 function applyAutoRefresh() {
-  const sec = Number(document.getElementById('autoRefreshSec').value || 0);
+  const sec = Number(document.getElementById('autoRefreshSec').value || 600);
+  const enabled = document.getElementById('autoRefreshEnabled').checked;
+
   if (autoRefreshTimer) {
     clearInterval(autoRefreshTimer);
     autoRefreshTimer = null;
   }
-  if (sec > 0) {
-    autoRefreshTimer = setInterval(refreshAllWallets, sec * 1000);
+
+  if (enabled && sec >= 1) {
+    autoRefreshTimer = setInterval(() => { refreshAllWallets(); }, sec * 1000);
   }
+}
+
+function initAutoRefresh() {
+  document.getElementById('autoRefreshSec').value = 600;
+  document.getElementById('autoRefreshEnabled').checked = true;
+  applyAutoRefresh();
 }
 
 function render() {
@@ -369,6 +386,7 @@ if (!state.groups.length) {
 }
 render();
 loadFx();
+initAutoRefresh();
 </script>
 </body>
 </html>
