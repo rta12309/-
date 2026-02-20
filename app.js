@@ -281,7 +281,16 @@ async function safeFetchJson(url, options = {}) {
   if (!res.ok) {
     throw new Error(`요청 실패 (${res.status})`);
   }
-  return res.json();
+
+  const payload = await res.json();
+  if (payload && payload.status === '0') {
+    const message = String(payload.result || payload.message || '알 수 없는 API 오류');
+    if (!/No\s*records/i.test(message)) {
+      throw new Error(`API 응답 오류: ${message}`);
+    }
+  }
+
+  return payload;
 }
 
 function parseUpbitPrice(payload) {
@@ -458,8 +467,14 @@ async function fetchEthereumWallet(address) {
     (token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd)
   );
 
-  if (!merged.length && ethplorerResult.status === 'rejected' && evmResult.status === 'rejected') {
-    throw new Error('Ethereum 조회 실패: API 응답을 확인해 주세요.');
+  if (!merged.length) {
+    if (ethplorerResult.status === 'rejected' && evmResult.status === 'rejected') {
+      throw new Error('Ethereum 조회 실패: API 응답을 확인해 주세요.');
+    }
+
+    if (ethplorerResult.status === 'rejected' && evmResult.status === 'fulfilled') {
+      throw new Error(`Ethereum 토큰 조회 실패: ${normalizeErrorMessage(ethplorerResult.reason)}`);
+    }
   }
 
   return merged;
@@ -535,6 +550,10 @@ async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
   if (!merged.length) {
     if (explorerResult.status === 'rejected' && nativeResult.status === 'rejected') {
       throw new Error('EVM 조회 실패: RPC/Explorer 응답을 확인해 주세요.');
+    }
+
+    if (explorerResult.status === 'rejected') {
+      throw new Error(`토큰 조회 실패: ${normalizeErrorMessage(explorerResult.reason)}`);
     }
 
     return [];
