@@ -1,3 +1,262 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>멀티 지갑 자산 대시보드</title>
+    <style>
+:root {
+  color-scheme: light;
+  --bg: #f6f8fb;
+  --card: #ffffff;
+  --border: #d8deea;
+  --text: #19212e;
+  --muted: #566176;
+  --primary: #3156f5;
+  --danger: #c62828;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+header h1 {
+  margin: 0;
+}
+
+header p {
+  color: var(--muted);
+}
+
+.fx-panel,
+.auto-panel,
+.group-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.group-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.group-name {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 15px;
+}
+
+.group-header-actions,
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: white;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.wallet-controls {
+  margin: 10px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.wallet-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(220px, 1fr) auto auto auto;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+
+.wallet-row input,
+.wallet-row select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px;
+}
+
+.wallet-row a {
+  text-decoration: none;
+  color: var(--primary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.link-disabled {
+  color: var(--muted) !important;
+  pointer-events: none;
+  text-decoration: line-through;
+}
+
+.remove-group-btn,
+.remove-wallet-btn {
+  color: var(--danger);
+}
+
+.group-summary {
+  margin: 12px 0;
+  padding: 10px;
+  background: #f2f5ff;
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wallet-result {
+  border-top: 1px solid var(--border);
+  padding: 10px 0;
+}
+
+.wallet-result h4 {
+  margin: 6px 0;
+}
+
+.wallet-result table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.wallet-result th,
+.wallet-result td {
+  border-bottom: 1px solid var(--border);
+  padding: 6px;
+  text-align: left;
+  font-size: 14px;
+}
+
+.empty-msg {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.error {
+  color: var(--danger);
+}
+
+@media (max-width: 860px) {
+  .wallet-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+.auto-panel {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.auto-panel input[type="number"] {
+  width: 80px;
+  margin-left: 6px;
+  padding: 6px;
+}
+
+</style>
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>멀티 지갑 자산 대시보드</h1>
+        <p>
+          그룹별로 지갑을 구성하고, 온체인 스캔 링크와 지원 API를 통해 토큰 및 가치를 한눈에 확인하세요.
+        </p>
+      </header>
+
+      <section class="fx-panel">
+        <button id="refresh-rate-btn" type="button">USDT/KRW 환율 새로고침</button>
+        <div id="fx-rate-display">업비트 KRW-USDT 환율을 불러오는 중...</div>
+      </section>
+
+      <section class="auto-panel">
+        <label>
+          <input id="auto-refresh-toggle" type="checkbox" />
+          자동 전체조회
+        </label>
+        <label>
+          주기(초)
+          <input id="auto-refresh-seconds" type="number" min="5" step="1" value="30" />
+        </label>
+      </section>
+
+      <section id="group-list" class="group-list"></section>
+
+      <div class="actions">
+        <button id="add-group-btn" type="button">그룹 추가</button>
+        <button id="analyze-all-btn" type="button" class="primary">전체 조회</button>
+      </div>
+    </main>
+
+    <template id="group-template">
+      <article class="group-card">
+        <div class="group-header">
+          <input type="text" class="group-name" placeholder="그룹 이름 (예: 장기보유)" />
+          <div class="group-header-actions">
+            <button type="button" class="add-wallet-btn">지갑 추가</button>
+            <button type="button" class="remove-group-btn">그룹 삭제</button>
+          </div>
+        </div>
+
+        <div class="wallet-controls">
+          <p>지갑 입력칸은 그룹당 최대 10개까지 추가 가능합니다.</p>
+        </div>
+
+        <div class="wallet-list"></div>
+
+        <div class="group-summary">
+          <div>그룹 합계 (USDT): <strong class="group-total-usdt">0.00</strong></div>
+          <div>그룹 합계 (KRW): <strong class="group-total-krw">0.00억</strong></div>
+        </div>
+
+        <div class="group-results"></div>
+      </article>
+    </template>
+
+    <template id="wallet-template">
+      <div class="wallet-row">
+        <select class="source-select" aria-label="조회 소스 선택"></select>
+        <input type="text" class="wallet-input" placeholder="지갑 주소 입력" />
+        <a class="explorer-link" href="#" target="_blank" rel="noopener noreferrer">스캔 URL</a>
+        <button type="button" class="remove-wallet-btn">삭제</button>
+      </div>
+    </template>
+
+    <script>
 const MAX_WALLETS_PER_GROUP = 10;
 const MIN_AUTO_REFRESH_SECONDS = 5;
 
@@ -565,3 +824,7 @@ function formatKrwEok(krw) {
   const eok = Number(krw || 0) / 100_000_000;
   return `${formatNumber(eok, 2)}억`;
 }
+
+</script>
+  </body>
+</html>

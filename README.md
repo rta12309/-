@@ -12,6 +12,11 @@
 
 브라우저에서 `http://localhost:4173` 열면 됩니다.
 
+## 압축 해제 없이 최대한 간단히 실행하는 방법
+
+- `portable.html`은 CSS/JS가 모두 들어있는 **단일 파일**입니다.
+- 가능하면 이 파일 하나만 복사해서 더블클릭해 실행할 수 있습니다.
+
 ## 수동 실행 방법
 
 ```bash
@@ -27,8 +32,9 @@ python3 -m http.server 4173
 - 업비트 API(`KRW-USDT`) 기반 환율 조회
 - KRW는 `억` 단위(소수점 둘째 자리)로 표시
 - Ethereum/Solana + BSC/Polygon/Arbitrum/Optimism/Avalanche/Base/TRON/Bitcoin 조회 지원
+- 지갑 주소가 비어 있을 때 스캔 URL은 각 체인의 기본 탐색기 메인 주소로 연결
 
 ## 사용 팁
 
 - 체인에 맞는 주소를 입력해야 조회됩니다.
-- `API URL`, `스캔 URL`은 유효한 주소 입력 시에만 활성화됩니다.
+- 스캔 URL은 주소를 입력하면 해당 주소 페이지로 자동 변경됩니다.
