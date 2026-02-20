@@ -35,6 +35,7 @@ header p {
 }
 
 .fx-panel,
+.auto-panel,
 .group-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -163,4 +164,18 @@ button.primary {
   .wallet-row {
     grid-template-columns: 1fr;
   }
+}
+
+
+.auto-panel {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.auto-panel input[type="number"] {
+  width: 80px;
+  margin-left: 6px;
+  padding: 6px;
 }

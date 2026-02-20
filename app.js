@@ -1,4 +1,5 @@
 const MAX_WALLETS_PER_GROUP = 10;
+const MIN_AUTO_REFRESH_SECONDS = 5;
 
 const enabled = {
   upbit: true,
@@ -24,77 +25,75 @@ const SOURCES = [
   },
   {
     key: 'bsc',
-    label: 'BNB Smart Chain (BscScan 링크)',
+    label: 'BNB Smart Chain (RPC + CoinGecko)',
     chain: 'bsc',
     explorerBase: 'https://bscscan.com/address/',
-    apiExample: 'https://api.bscscan.com/api?module=account&action=tokenbalance&address={address}',
-    fetcher: null,
+    apiExample: 'https://bsc-dataseed.binance.org (eth_getBalance)',
+    fetcher: (address) => fetchEvmNativeWallet(address, 'https://bsc-dataseed.binance.org', 'binancecoin', 'BNB'),
   },
   {
     key: 'polygon',
-    label: 'Polygon (PolygonScan 링크)',
+    label: 'Polygon (RPC + CoinGecko)',
     chain: 'polygon',
     explorerBase: 'https://polygonscan.com/address/',
-    apiExample:
-      'https://api.polygonscan.com/api?module=account&action=tokenbalance&address={address}',
-    fetcher: null,
+    apiExample: 'https://polygon-rpc.com (eth_getBalance)',
+    fetcher: (address) => fetchEvmNativeWallet(address, 'https://polygon-rpc.com', 'matic-network', 'MATIC'),
   },
   {
     key: 'arbitrum',
-    label: 'Arbitrum (Arbiscan 링크)',
+    label: 'Arbitrum (RPC + CoinGecko)',
     chain: 'arbitrum',
     explorerBase: 'https://arbiscan.io/address/',
-    apiExample:
-      'https://api.arbiscan.io/api?module=account&action=tokenbalance&address={address}',
-    fetcher: null,
+    apiExample: 'https://arb1.arbitrum.io/rpc (eth_getBalance)',
+    fetcher: (address) => fetchEvmNativeWallet(address, 'https://arb1.arbitrum.io/rpc', 'ethereum', 'ETH'),
   },
   {
     key: 'optimism',
-    label: 'Optimism (Optimistic Etherscan 링크)',
+    label: 'Optimism (RPC + CoinGecko)',
     chain: 'optimism',
     explorerBase: 'https://optimistic.etherscan.io/address/',
-    apiExample:
-      'https://api-optimistic.etherscan.io/api?module=account&action=tokenbalance&address={address}',
-    fetcher: null,
+    apiExample: 'https://mainnet.optimism.io (eth_getBalance)',
+    fetcher: (address) => fetchEvmNativeWallet(address, 'https://mainnet.optimism.io', 'ethereum', 'ETH'),
   },
   {
     key: 'avalanche',
-    label: 'Avalanche (SnowTrace 링크)',
+    label: 'Avalanche (RPC + CoinGecko)',
     chain: 'avalanche',
     explorerBase: 'https://snowtrace.io/address/',
-    apiExample:
-      'https://api.snowtrace.io/api?module=account&action=tokenbalance&address={address}',
-    fetcher: null,
+    apiExample: 'https://api.avax.network/ext/bc/C/rpc (eth_getBalance)',
+    fetcher: (address) =>
+      fetchEvmNativeWallet(address, 'https://api.avax.network/ext/bc/C/rpc', 'avalanche-2', 'AVAX'),
   },
   {
     key: 'base',
-    label: 'Base (BaseScan 링크)',
+    label: 'Base (RPC + CoinGecko)',
     chain: 'base',
     explorerBase: 'https://basescan.org/address/',
-    apiExample: 'https://api.basescan.org/api?module=account&action=tokenbalance&address={address}',
-    fetcher: null,
+    apiExample: 'https://mainnet.base.org (eth_getBalance)',
+    fetcher: (address) => fetchEvmNativeWallet(address, 'https://mainnet.base.org', 'ethereum', 'ETH'),
   },
   {
     key: 'tron',
-    label: 'TRON (Tronscan 링크)',
+    label: 'TRON (TronGrid API)',
     chain: 'tron',
     explorerBase: 'https://tronscan.org/#/address/',
-    apiExample: 'https://apilist.tronscanapi.com/api/account/tokens?address={address}',
-    fetcher: null,
+    apiExample: 'https://api.trongrid.io/v1/accounts/{address}',
+    fetcher: fetchTronWallet,
   },
   {
     key: 'bitcoin',
-    label: 'Bitcoin (Blockstream 링크)',
+    label: 'Bitcoin (Blockstream API)',
     chain: 'bitcoin',
     explorerBase: 'https://blockstream.info/address/',
     apiExample: 'https://blockstream.info/api/address/{address}',
-    fetcher: null,
+    fetcher: fetchBitcoinWallet,
   },
 ];
 
 let usdtKrwRate = 0;
 let elements = null;
 let initialized = false;
+let autoAnalyzeTimer = null;
 
 function init() {
   if (initialized) return;
@@ -107,6 +106,8 @@ function init() {
     fxRateDisplay: document.getElementById('fx-rate-display'),
     groupTemplate: document.getElementById('group-template'),
     walletTemplate: document.getElementById('wallet-template'),
+    autoRefreshToggle: document.getElementById('auto-refresh-toggle'),
+    autoRefreshSeconds: document.getElementById('auto-refresh-seconds'),
   };
 
   if (!Object.values(elements).every(Boolean)) {
@@ -118,22 +119,35 @@ function init() {
 
   elements.refreshRateBtn.addEventListener('click', loadUpbitRate);
   elements.addGroupBtn.addEventListener('click', () => createGroup());
-  elements.analyzeAllBtn.addEventListener('click', analyzeAllGroups);
+  elements.analyzeAllBtn.addEventListener('click', () => analyzeAllGroups(true));
+  elements.autoRefreshToggle.addEventListener('change', updateAutoAnalyze);
+  elements.autoRefreshSeconds.addEventListener('change', updateAutoAnalyze);
 
   createGroup('기본 그룹');
-
-  if (window.location.protocol === 'file:') {
-    elements.fxRateDisplay.textContent =
-      '현재 파일 직접 실행 모드(file://)입니다. API 차단(CORS)으로 조회가 안 될 수 있어요. 아래 실행 파일(run_local_server)이나 python 명령으로 여는 것을 권장합니다.';
-  } else {
-    loadUpbitRate();
-  }
+  loadUpbitRate();
 }
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
 } else {
   init();
+}
+
+function updateAutoAnalyze() {
+  if (autoAnalyzeTimer) {
+    clearInterval(autoAnalyzeTimer);
+    autoAnalyzeTimer = null;
+  }
+
+  if (!elements.autoRefreshToggle.checked) {
+    return;
+  }
+
+  const seconds = Math.max(MIN_AUTO_REFRESH_SECONDS, Number(elements.autoRefreshSeconds.value || 0));
+  elements.autoRefreshSeconds.value = String(seconds);
+
+  analyzeAllGroups(false);
+  autoAnalyzeTimer = setInterval(() => analyzeAllGroups(false), seconds * 1000);
 }
 
 function createGroup(defaultName = '') {
@@ -260,8 +274,8 @@ async function loadUpbitRate() {
   }
 }
 
-async function safeFetchJson(url) {
-  const res = await fetch(url);
+async function safeFetchJson(url, options = {}) {
+  const res = await fetch(url, options);
   if (!res.ok) {
     throw new Error(`요청 실패 (${res.status})`);
   }
@@ -275,7 +289,11 @@ function parseUpbitPrice(payload) {
   return Number(payload[0]?.trade_price || 0);
 }
 
-async function analyzeAllGroups() {
+async function analyzeAllGroups(refreshFx = true) {
+  if (elements.analyzeAllBtn.disabled) {
+    return;
+  }
+
   const groups = [...document.querySelectorAll('.group-card')];
   if (!groups.length) {
     alert('먼저 그룹을 추가해 주세요.');
@@ -286,6 +304,10 @@ async function analyzeAllGroups() {
   elements.analyzeAllBtn.textContent = '조회 중...';
 
   try {
+    if (refreshFx) {
+      await loadUpbitRate();
+    }
+
     for (const groupNode of groups) {
       await analyzeGroup(groupNode);
     }
@@ -319,10 +341,6 @@ async function analyzeGroup(groupNode) {
         throw new Error('주소 형식이 올바르지 않습니다. 체인과 주소를 다시 확인해 주세요.');
       }
 
-      if (!sourceConfig.fetcher) {
-        throw new Error('이 체인은 현재 스캔/API 링크 제공만 지원합니다.');
-      }
-
       const tokenData = await sourceConfig.fetcher(address);
       const walletUsdt = tokenData.reduce((sum, token) => sum + token.valueUsd, 0);
       groupTotalUsdt += walletUsdt;
@@ -333,7 +351,7 @@ async function analyzeGroup(groupNode) {
   }
 
   totalUsdtEl.textContent = formatNumber(groupTotalUsdt, 2);
-  totalKrwEl.textContent = usdtKrwRate ? formatNumber(groupTotalUsdt * usdtKrwRate, 0) : '환율 필요';
+  totalKrwEl.textContent = usdtKrwRate ? formatKrwEok(groupTotalUsdt * usdtKrwRate) : '환율 필요';
 
   if (!groupResults.children.length) {
     const empty = document.createElement('p');
@@ -366,7 +384,7 @@ function renderWalletResult(container, tokens, walletUsdt, sourceLabel, address)
   const strong = document.createElement('strong');
   strong.textContent = `${formatNumber(walletUsdt, 2)} USDT(USD)`;
   summary.appendChild(strong);
-  summary.append(` / ${usdtKrwRate ? `${formatNumber(walletUsdt * usdtKrwRate, 0)} KRW` : '환율 필요'}`);
+  summary.append(` / ${usdtKrwRate ? formatKrwEok(walletUsdt * usdtKrwRate) : '환율 필요'}`);
 
   const table = document.createElement('table');
   const thead = document.createElement('thead');
@@ -420,12 +438,9 @@ function renderWalletError(container, sourceLabel, address, message) {
 }
 
 async function fetchEthereumWallet(address) {
-  const res = await fetch(
+  const data = await safeFetchJson(
     `https://api.ethplorer.io/getAddressInfo/${encodeURIComponent(address)}?apiKey=freekey`
   );
-  if (!res.ok) throw new Error(`Ethereum 조회 실패 (${res.status})`);
-
-  const data = await res.json();
   const tokens = data.tokens || [];
 
   return tokens
@@ -444,20 +459,17 @@ async function fetchEthereumWallet(address) {
 }
 
 async function fetchSolanaWallet(address) {
-  const [tokenRes, priceRes] = await Promise.all([
-    fetch(
+  const [tokenPayload, solPayload] = await Promise.all([
+    safeFetchJson(
       `https://api-v2.solscan.io/v2/account/token-accounts?address=${encodeURIComponent(
         address
       )}&page=1&page_size=40&type=token`
     ),
-    fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'),
+    safeFetchJson('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'),
   ]);
 
-  if (!tokenRes.ok) throw new Error(`Solana 조회 실패 (${tokenRes.status})`);
-
-  const tokenPayload = await tokenRes.json();
   const tokenData = tokenPayload?.data?.tokenAccounts || [];
-  const solPriceUsd = (await priceRes.json())?.solana?.usd ?? 0;
+  const solPriceUsd = Number(solPayload?.solana?.usd || 0);
 
   return tokenData
     .map((token) => {
@@ -479,9 +491,85 @@ async function fetchSolanaWallet(address) {
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
 }
 
+async function fetchEvmNativeWallet(address, rpcUrl, geckoId, symbol) {
+  const [rpcPayload, pricePayload] = await Promise.all([
+    safeFetchJson(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_getBalance', params: [address, 'latest'], id: 1 }),
+    }),
+    safeFetchJson(`https://api.coingecko.com/api/v3/simple/price?ids=${geckoId}&vs_currencies=usd`),
+  ]);
+
+  const weiHex = rpcPayload?.result;
+  if (!weiHex || typeof weiHex !== 'string') {
+    throw new Error('RPC 잔액 조회 실패');
+  }
+
+  const amount = Number(BigInt(weiHex) / 10n ** 10n) / 10 ** 8;
+  const priceUsd = Number(pricePayload?.[geckoId]?.usd || 0);
+
+  return [
+    {
+      symbol,
+      amount,
+      priceUsd,
+      valueUsd: amount * priceUsd,
+    },
+  ].filter((token) => token.amount > 0 && Number.isFinite(token.valueUsd));
+}
+
+async function fetchTronWallet(address) {
+  const [accPayload, pricePayload] = await Promise.all([
+    safeFetchJson(`https://api.trongrid.io/v1/accounts/${encodeURIComponent(address)}`),
+    safeFetchJson('https://api.coingecko.com/api/v3/simple/price?ids=tron&vs_currencies=usd'),
+  ]);
+
+  const data = accPayload?.data?.[0] || {};
+  const amountSun = Number(data.balance || 0);
+  const amount = amountSun / 1_000_000;
+  const priceUsd = Number(pricePayload?.tron?.usd || 0);
+
+  return [
+    {
+      symbol: 'TRX',
+      amount,
+      priceUsd,
+      valueUsd: amount * priceUsd,
+    },
+  ].filter((token) => token.amount > 0 && Number.isFinite(token.valueUsd));
+}
+
+async function fetchBitcoinWallet(address) {
+  const [addrPayload, pricePayload] = await Promise.all([
+    safeFetchJson(`https://blockstream.info/api/address/${encodeURIComponent(address)}`),
+    safeFetchJson('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd'),
+  ]);
+
+  const funded = Number(addrPayload?.chain_stats?.funded_txo_sum || 0);
+  const spent = Number(addrPayload?.chain_stats?.spent_txo_sum || 0);
+  const sats = funded - spent;
+  const amount = sats / 100_000_000;
+  const priceUsd = Number(pricePayload?.bitcoin?.usd || 0);
+
+  return [
+    {
+      symbol: 'BTC',
+      amount,
+      priceUsd,
+      valueUsd: amount * priceUsd,
+    },
+  ].filter((token) => token.amount > 0 && Number.isFinite(token.valueUsd));
+}
+
 function formatNumber(value, digits = 2) {
   return Number(value || 0).toLocaleString('ko-KR', {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
+}
+
+function formatKrwEok(krw) {
+  const eok = Number(krw || 0) / 100_000_000;
+  return `${formatNumber(eok, 2)}억`;
 }

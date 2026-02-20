@@ -20,6 +20,17 @@
         <div id="fx-rate-display">업비트 KRW-USDT 환율을 불러오는 중...</div>
       </section>
 
+      <section class="auto-panel">
+        <label>
+          <input id="auto-refresh-toggle" type="checkbox" />
+          자동 전체조회
+        </label>
+        <label>
+          주기(초)
+          <input id="auto-refresh-seconds" type="number" min="5" step="1" value="30" />
+        </label>
+      </section>
+
       <section id="group-list" class="group-list"></section>
 
       <div class="actions">
@@ -46,7 +57,7 @@
 
         <div class="group-summary">
           <div>그룹 합계 (USDT): <strong class="group-total-usdt">0.00</strong></div>
-          <div>그룹 합계 (KRW): <strong class="group-total-krw">0</strong></div>
+          <div>그룹 합계 (KRW): <strong class="group-total-krw">0.00억</strong></div>
         </div>
 
         <div class="group-results"></div>
