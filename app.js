@@ -1,5 +1,9 @@
 const MAX_WALLETS_PER_GROUP = 10;
 
+const enabled = {
+  upbit: true,
+};
+
 const SOURCES = [
   {
     key: 'ethereum',
@@ -90,8 +94,10 @@ const SOURCES = [
 
 let usdtKrwRate = 0;
 let elements = null;
+let initialized = false;
 
 function init() {
+  if (initialized) return;
   elements = {
     groupList: document.getElementById('group-list'),
     addGroupBtn: document.getElementById('add-group-btn'),
@@ -107,6 +113,8 @@ function init() {
     console.error('필수 UI 요소를 찾을 수 없습니다.');
     return;
   }
+
+  initialized = true;
 
   elements.refreshRateBtn.addEventListener('click', loadUpbitRate);
   elements.addGroupBtn.addEventListener('click', () => createGroup());
@@ -185,17 +193,37 @@ function getSourceConfig(key) {
 async function loadUpbitRate() {
   elements.fxRateDisplay.textContent = '업비트 KRW-USDT 환율 조회 중...';
   try {
-    const res = await fetch('https://api.upbit.com/v1/ticker?markets=KRW-USDT');
-    if (!res.ok) {
-      throw new Error('업비트 응답 실패');
+    const [upbitUsdt] = await Promise.all([
+      enabled.upbit
+        ? safeFetchJson('https://api.upbit.com/v1/ticker?markets=KRW-USDT')
+        : Promise.resolve(null),
+    ]);
+
+    usdtKrwRate = parseUpbitPrice(upbitUsdt);
+    if (!usdtKrwRate) {
+      throw new Error('업비트 가격 파싱 실패');
     }
-    const [ticker] = await res.json();
-    usdtKrwRate = Number(ticker?.trade_price || 0);
+
     elements.fxRateDisplay.textContent = `업비트 KRW-USDT: ${formatNumber(usdtKrwRate, 2)} KRW`;
   } catch (error) {
     usdtKrwRate = 0;
     elements.fxRateDisplay.textContent = `환율 조회 실패: ${error.message}`;
   }
+}
+
+async function safeFetchJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`요청 실패 (${res.status})`);
+  }
+  return res.json();
+}
+
+function parseUpbitPrice(payload) {
+  if (!Array.isArray(payload) || !payload.length) {
+    return 0;
+  }
+  return Number(payload[0]?.trade_price || 0);
 }
 
 async function analyzeAllGroups() {
