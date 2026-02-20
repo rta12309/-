@@ -285,11 +285,10 @@ const SOURCES = [
   },
   {
     key: 'solana',
-    label: 'Solana (Solscan API)',
+    label: 'Solana (RPC + Jupiter Price)',
     chain: 'solana',
     explorerBase: 'https://solscan.io/account/',
-    apiExample:
-      'https://api-v2.solscan.io/v2/account/token-accounts?address={address}&page=1&page_size=40&type=token',
+    apiExample: 'https://api.mainnet-beta.solana.com (getBalance/getTokenAccountsByOwner)',
     fetcher: fetchSolanaWallet,
   },
   {
@@ -634,7 +633,7 @@ async function analyzeGroup(groupNode) {
 function normalizeErrorMessage(error) {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
-    return '네트워크/CORS로 API 호출이 차단되었습니다. run_local_server 또는 python 서버로 실행해 주세요.';
+    return '외부 API 네트워크/CORS 제한으로 조회에 실패했습니다. 잠시 후 다시 시도하거나 다른 체인으로 확인해 주세요.';
   }
   return message;
 }
@@ -761,36 +760,78 @@ async function fetchEthereumWalletFromEthplorer(address) {
 }
 
 async function fetchSolanaWallet(address) {
-  const [tokenPayload, solPayload] = await Promise.all([
-    safeFetchJson(
-      `https://api-v2.solscan.io/v2/account/token-accounts?address=${encodeURIComponent(
-        address
-      )}&page=1&page_size=40&type=token`
-    ),
-    safeFetchJson('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'),
+  const solanaRpcUrl = 'https://api.mainnet-beta.solana.com';
+  const [solBalancePayload, tokenAccountsPayload] = await Promise.all([
+    safeFetchJson(solanaRpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBalance', params: [address] }),
+    }),
+    safeFetchJson(solanaRpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'getTokenAccountsByOwner',
+        params: [address, { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }, { encoding: 'jsonParsed' }],
+      }),
+    }),
   ]);
 
-  const tokenData = tokenPayload?.data?.tokenAccounts || [];
-  const solPriceUsd = Number(solPayload?.solana?.usd || 0);
+  const tokenAccounts = tokenAccountsPayload?.result?.value || [];
+  const mints = [...new Set(
+    tokenAccounts
+      .map((item) => item?.account?.data?.parsed?.info?.mint)
+      .filter((mint) => typeof mint === 'string' && mint.length > 0)
+  )];
 
-  return tokenData
-    .map((token) => {
-      const amount = Number(
-        token.amount ?? token.balance ?? token.tokenAmount?.uiAmount ?? token.tokenAmount?.amount ?? 0
+  let mintPrices = {};
+  if (mints.length) {
+    try {
+      const pricePayload = await safeFetchJson(
+        `https://price.jup.ag/v4/price?ids=${encodeURIComponent(mints.join(','))}`
       );
-      const symbol = token.symbol || token.tokenSymbol || token.tokenName || token.tokenAddress || 'UNKNOWN';
-      const priceUsd =
-        Number(token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? 0) ||
-        (symbol === 'SOL' ? solPriceUsd : 0);
+      mintPrices = pricePayload?.data || {};
+    } catch (error) {
+      mintPrices = {};
+    }
+  }
+
+  const solAmount = Number(solBalancePayload?.result?.value || 0) / 1_000_000_000;
+
+  const [solPricePayload] = await Promise.all([
+    safeFetchJson('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'),
+  ]);
+  const solPriceUsd = Number(solPricePayload?.solana?.usd || 0);
+
+  const splTokens = tokenAccounts
+    .map((item) => {
+      const info = item?.account?.data?.parsed?.info || {};
+      const amount = Number(info?.tokenAmount?.uiAmount || 0);
+      const mint = info?.mint || 'UNKNOWN';
+      const priceUsd = Number(mintPrices?.[mint]?.price || 0);
 
       return {
-        symbol,
+        symbol: mint.slice(0, 4) + '...' + mint.slice(-4),
         amount,
-        priceUsd: Number(priceUsd || 0),
-        valueUsd: amount * Number(priceUsd || 0),
+        priceUsd,
+        valueUsd: amount * priceUsd,
       };
     })
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+
+  const tokens = [
+    {
+      symbol: 'SOL',
+      amount: solAmount,
+      priceUsd: solPriceUsd,
+      valueUsd: solAmount * solPriceUsd,
+    },
+    ...splTokens,
+  ].filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+
+  return tokens;
 }
 
 async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
