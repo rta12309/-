@@ -1,6 +1,15 @@
 const MAX_WALLETS_PER_GROUP = 10;
 const MIN_AUTO_REFRESH_SECONDS = 5;
 const ETHERSCAN_V2_ENDPOINT = 'https://api.etherscan.io/v2/api';
+const EXPLORER_V1_ENDPOINTS = {
+  '1': 'https://api.etherscan.io/api',
+  '56': 'https://api.bscscan.com/api',
+  '137': 'https://api.polygonscan.com/api',
+  '42161': 'https://api.arbiscan.io/api',
+  '10': 'https://api-optimistic.etherscan.io/api',
+  '43114': 'https://api.snowtrace.io/api',
+  '8453': 'https://api.basescan.org/api',
+};
 
 const enabled = {
   upbit: true,
@@ -13,7 +22,7 @@ const SOURCES = [
     chain: 'ethereum',
     explorerBase: 'https://etherscan.io/address/',
     apiExample: 'https://api.ethplorer.io/getAddressInfo/{address}?apiKey=freekey',
-    fetcher: (address) => fetchEvmWallet(address, '1', 'https://cloudflare-eth.com', 'ethereum', 'ETH'),
+    fetcher: fetchEthereumWallet,
   },
   {
     key: 'solana',
@@ -430,6 +439,53 @@ function renderWalletError(container, sourceLabel, address, message) {
   container.replaceChildren(createWalletHeader(sourceLabel, address), error);
 }
 
+async function fetchEthereumWallet(address) {
+  const [ethplorerResult, evmResult] = await Promise.allSettled([
+    fetchEthereumWalletFromEthplorer(address),
+    fetchEvmWallet(address, '1', 'https://cloudflare-eth.com', 'ethereum', 'ETH'),
+  ]);
+
+  const ethplorerTokens = ethplorerResult.status === 'fulfilled' ? ethplorerResult.value : [];
+  const evmTokens = evmResult.status === 'fulfilled' ? evmResult.value : [];
+
+  const bySymbol = new Map();
+  [...evmTokens, ...ethplorerTokens].forEach((token) => {
+    const key = `${token.symbol}|${Number(token.amount).toFixed(8)}`;
+    if (!bySymbol.has(key)) bySymbol.set(key, token);
+  });
+
+  const merged = [...bySymbol.values()].filter(
+    (token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd)
+  );
+
+  if (!merged.length && ethplorerResult.status === 'rejected' && evmResult.status === 'rejected') {
+    throw new Error('Ethereum 조회 실패: API 응답을 확인해 주세요.');
+  }
+
+  return merged;
+}
+
+async function fetchEthereumWalletFromEthplorer(address) {
+  const data = await safeFetchJson(
+    `https://api.ethplorer.io/getAddressInfo/${encodeURIComponent(address)}?apiKey=freekey`
+  );
+  const tokens = data.tokens || [];
+
+  return tokens
+    .map(({ tokenInfo, balance }) => {
+      const decimals = Number(tokenInfo?.decimals || 0);
+      const amount = Number(balance || 0) / 10 ** decimals;
+      const priceUsd = Number(tokenInfo?.price?.rate || 0);
+      return {
+        symbol: tokenInfo?.symbol || tokenInfo?.name || 'UNKNOWN',
+        amount,
+        priceUsd,
+        valueUsd: amount * priceUsd,
+      };
+    })
+    .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+}
+
 async function fetchSolanaWallet(address) {
   const [tokenPayload, solPayload] = await Promise.all([
     safeFetchJson(
@@ -488,28 +544,61 @@ async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
 }
 
 async function fetchExplorerTokenBalances(chainId, address) {
-  const url = `${ETHERSCAN_V2_ENDPOINT}?chainid=${chainId}&module=account&action=addresstokenbalance&address=${encodeURIComponent(
-    address
-  )}&page=1&offset=200`;
+  const candidates = [
+    `${ETHERSCAN_V2_ENDPOINT}?chainid=${chainId}&module=account&action=addresstokenbalance&address=${encodeURIComponent(
+      address
+    )}&page=1&offset=200`,
+    EXPLORER_V1_ENDPOINTS[chainId]
+      ? `${EXPLORER_V1_ENDPOINTS[chainId]}?module=account&action=addresstokenbalance&address=${encodeURIComponent(
+          address
+        )}&page=1&offset=200`
+      : null,
+  ].filter(Boolean);
 
-  const payload = await safeFetchJson(url);
-  const rows = Array.isArray(payload?.result) ? payload.result : [];
+  let rows = [];
+  for (const url of candidates) {
+    try {
+      const payload = await safeFetchJson(url);
+      const parsed = parseExplorerRows(payload?.result);
+      if (parsed.length) {
+        rows = parsed;
+        break;
+      }
+    } catch (error) {
+      // try next endpoint
+    }
+  }
 
   return rows
     .map((row) => {
-      const decimals = Number(row.TokenDivisor || row.tokenDecimal || 0);
-      const rawQty = row.TokenQuantity ?? row.balance ?? 0;
+      const decimals = Number(row.TokenDivisor || row.tokenDecimal || row.decimals || 0);
+      const rawQty = row.TokenQuantity ?? row.balance ?? row.value ?? 0;
       const amount = decimals > 0 ? Number(rawQty) / 10 ** decimals : Number(rawQty || 0);
-      const priceUsd = Number(row.TokenPriceUSD || row.tokenPriceUSD || 0);
+      const priceUsd = Number(row.TokenPriceUSD || row.tokenPriceUSD || row.usdPrice || 0);
 
       return {
-        symbol: row.TokenSymbol || row.tokenSymbol || row.TokenName || row.tokenName || 'UNKNOWN',
+        symbol: row.TokenSymbol || row.tokenSymbol || row.TokenName || row.tokenName || row.symbol || 'UNKNOWN',
         amount,
         priceUsd,
         valueUsd: amount * priceUsd,
       };
     })
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+}
+
+function parseExplorerRows(result) {
+  if (Array.isArray(result)) return result;
+  if (result && Array.isArray(result.items)) return result.items;
+  if (typeof result === 'string') {
+    try {
+      const parsed = JSON.parse(result);
+      if (Array.isArray(parsed)) return parsed;
+      if (parsed && Array.isArray(parsed.items)) return parsed.items;
+    } catch (error) {
+      return [];
+    }
+  }
+  return [];
 }
 
 async function fetchEvmNativeWallet(address, rpcUrl, geckoId, symbol) {

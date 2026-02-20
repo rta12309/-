@@ -32,7 +32,8 @@ python3 -m http.server 4173
 - 업비트 API(`KRW-USDT`) 기반 환율 조회
 - KRW는 `억` 단위(소수점 둘째 자리)로 표시
 - Ethereum/Solana + BSC/Polygon/Arbitrum/Optimism/Avalanche/Base/TRON/Bitcoin 조회 지원
-- EVM 체인은 Etherscan V2 토큰 목록/가격 데이터를 우선 사용하여 CoinGecko 미등록 토큰도 표시 시도
+- EVM 체인은 Etherscan V2/체인 Explorer 토큰 목록·가격 데이터를 우선 사용하여 CoinGecko 미등록 토큰도 표시 시도
+- Ethereum은 Ethplorer + Explorer 데이터를 병합해 토큰 누락을 줄임
 - 지갑 주소가 비어 있을 때 스캔 URL은 각 체인의 기본 탐색기 메인 주소로 연결
 
 ## 사용 팁
