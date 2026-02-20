@@ -723,14 +723,27 @@ async function fetchSolanaWallet(address) {
 }
 
 async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
-  const [explorerTokens, nativeTokens] = await Promise.all([
+  const [explorerResult, nativeResult] = await Promise.allSettled([
     fetchExplorerTokenBalances(chainId, address),
     fetchEvmNativeWallet(address, rpcUrl, geckoId, symbol),
   ]);
 
-  return [...nativeTokens, ...explorerTokens].filter(
+  const explorerTokens = explorerResult.status === 'fulfilled' ? explorerResult.value : [];
+  const nativeTokens = nativeResult.status === 'fulfilled' ? nativeResult.value : [];
+
+  const merged = [...nativeTokens, ...explorerTokens].filter(
     (token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd)
   );
+
+  if (!merged.length) {
+    if (explorerResult.status === 'rejected' && nativeResult.status === 'rejected') {
+      throw new Error('EVM 조회 실패: RPC/Explorer 응답을 확인해 주세요.');
+    }
+
+    return [];
+  }
+
+  return merged;
 }
 
 async function fetchExplorerTokenBalances(chainId, address) {
@@ -770,7 +783,7 @@ async function fetchEvmNativeWallet(address, rpcUrl, geckoId, symbol) {
 
   const weiHex = rpcPayload?.result;
   if (!weiHex || typeof weiHex !== 'string') {
-    throw new Error('RPC 잔액 조회 실패');
+    throw new Error('RPC 잔액 조회 실패 (native)');
   }
 
   const amount = Number(BigInt(weiHex)) / 1e18;
