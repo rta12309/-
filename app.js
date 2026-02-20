@@ -94,7 +94,7 @@ async function analyzeGroup(groupNode) {
   const groupResults = groupNode.querySelector('.group-results');
   const totalUsdtEl = groupNode.querySelector('.group-total-usdt');
   const totalKrwEl = groupNode.querySelector('.group-total-krw');
-  groupResults.innerHTML = '';
+  groupResults.replaceChildren();
 
   let groupTotalUsdt = 0;
   const rows = [...groupNode.querySelectorAll('.wallet-row')];
@@ -108,7 +108,7 @@ async function analyzeGroup(groupNode) {
 
     const resultWrap = document.createElement('div');
     resultWrap.className = 'wallet-result';
-    resultWrap.innerHTML = `<h4>${source.toUpperCase()} | ${address}</h4><p>조회 중...</p>`;
+    renderWalletLoading(resultWrap, source, address);
     groupResults.appendChild(resultWrap);
 
     try {
@@ -123,7 +123,7 @@ async function analyzeGroup(groupNode) {
       groupTotalUsdt += walletUsdt;
       renderWalletResult(resultWrap, tokenData, walletUsdt, source, address);
     } catch (error) {
-      resultWrap.innerHTML = `<h4>${source.toUpperCase()} | ${address}</h4><p class="error">오류: ${error.message}</p>`;
+      renderWalletError(resultWrap, source, address, error.message);
     }
   }
 
@@ -133,42 +133,82 @@ async function analyzeGroup(groupNode) {
     : '환율 필요';
 
   if (!groupResults.children.length) {
-    groupResults.innerHTML = '<p class="empty-msg">입력된 지갑 주소가 없습니다.</p>';
+    const empty = document.createElement('p');
+    empty.className = 'empty-msg';
+    empty.textContent = '입력된 지갑 주소가 없습니다.';
+    groupResults.appendChild(empty);
   }
 }
 
 function renderWalletResult(container, tokens, walletUsdt, source, address) {
+  const header = createWalletHeader(source, address);
+
   if (!tokens.length) {
-    container.innerHTML = `<h4>${source.toUpperCase()} | ${address}</h4><p class="empty-msg">토큰 데이터가 없거나 조회에 실패했습니다.</p>`;
+    const empty = document.createElement('p');
+    empty.className = 'empty-msg';
+    empty.textContent = '토큰 데이터가 없거나 조회에 실패했습니다.';
+    container.replaceChildren(header, empty);
     return;
   }
 
-  const rows = tokens
-    .sort((a, b) => b.valueUsd - a.valueUsd)
-    .map(
-      (token) => `
-      <tr>
-        <td>${token.symbol}</td>
-        <td>${formatNumber(token.amount, 6)}</td>
-        <td>${formatNumber(token.priceUsd, 4)}</td>
-        <td>${formatNumber(token.valueUsd, 2)}</td>
-      </tr>
-    `
-    )
-    .join('');
+  const summary = document.createElement('p');
+  summary.textContent = '지갑 합계: ';
+  const strong = document.createElement('strong');
+  strong.textContent = `${formatNumber(walletUsdt, 2)} USDT(USD)`;
+  summary.appendChild(strong);
+  summary.append(
+    ` / ${usdtKrwRate ? `${formatNumber(walletUsdt * usdtKrwRate, 0)} KRW` : '환율 필요'}`
+  );
 
-  container.innerHTML = `
-    <h4>${source.toUpperCase()} | ${address}</h4>
-    <p>지갑 합계: <strong>${formatNumber(walletUsdt, 2)} USDT(USD)</strong> / ${
-      usdtKrwRate ? `${formatNumber(walletUsdt * usdtKrwRate, 0)} KRW` : '환율 필요'
-    }</p>
-    <table>
-      <thead>
-        <tr><th>토큰</th><th>보유량</th><th>가격(USD)</th><th>가치(USD)</th></tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  ['토큰', '보유량', '가격(USD)', '가치(USD)'].forEach((label) => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+
+  const tbody = document.createElement('tbody');
+  tokens
+    .sort((a, b) => b.valueUsd - a.valueUsd)
+    .forEach((token) => {
+      const tr = document.createElement('tr');
+      [
+        token.symbol,
+        formatNumber(token.amount, 6),
+        formatNumber(token.priceUsd, 4),
+        formatNumber(token.valueUsd, 2),
+      ].forEach((value) => {
+        const td = document.createElement('td');
+        td.textContent = value;
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+
+  table.append(thead, tbody);
+  container.replaceChildren(header, summary, table);
+}
+
+function createWalletHeader(source, address) {
+  const header = document.createElement('h4');
+  header.textContent = `${source.toUpperCase()} | ${address}`;
+  return header;
+}
+
+function renderWalletLoading(container, source, address) {
+  const status = document.createElement('p');
+  status.textContent = '조회 중...';
+  container.replaceChildren(createWalletHeader(source, address), status);
+}
+
+function renderWalletError(container, source, address, message) {
+  const error = document.createElement('p');
+  error.className = 'error';
+  error.textContent = `오류: ${message}`;
+  container.replaceChildren(createWalletHeader(source, address), error);
 }
 
 async function fetchEthereumWallet(address) {
@@ -201,7 +241,9 @@ async function fetchEthereumWallet(address) {
 
 async function fetchSolanaWallet(address) {
   const [tokenRes, priceRes] = await Promise.all([
-    fetch(`https://public-api.solscan.io/account/tokens?account=${encodeURIComponent(address)}`),
+    fetch(
+      `https://api-v2.solscan.io/v2/account/token-accounts?address=${encodeURIComponent(address)}&page=1&page_size=40&type=token`
+    ),
     fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'),
   ]);
 
@@ -209,16 +251,22 @@ async function fetchSolanaWallet(address) {
     throw new Error(`Solana 조회 실패 (${tokenRes.status})`);
   }
 
-  const tokenData = await tokenRes.json();
+  const tokenPayload = await tokenRes.json();
+  const tokenData = tokenPayload?.data?.tokenAccounts || [];
   const solPriceUsd = (await priceRes.json())?.solana?.usd ?? 0;
 
   return tokenData
     .map((token) => {
-      const amount = Number(token.tokenAmount?.uiAmount ?? token.tokenAmount?.amount ?? 0);
-      const priceUsd = token.tokenPrice?.usd ?? (token.tokenSymbol === 'SOL' ? solPriceUsd : 0);
+      const amount = Number(
+        token.amount ?? token.balance ?? token.tokenAmount?.uiAmount ?? token.tokenAmount?.amount ?? 0
+      );
+      const symbol = token.symbol || token.tokenSymbol || token.tokenName || token.tokenAddress || 'UNKNOWN';
+      const priceUsd =
+        Number(token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? 0) ||
+        (symbol === 'SOL' ? solPriceUsd : 0);
       const valueUsd = amount * Number(priceUsd || 0);
       return {
-        symbol: token.tokenSymbol || token.tokenName || token.tokenAddress || 'UNKNOWN',
+        symbol,
         amount,
         priceUsd: Number(priceUsd || 0),
         valueUsd,
