@@ -11,8 +11,7 @@
       <header>
         <h1>멀티 지갑 자산 대시보드</h1>
         <p>
-          그룹별로 지갑을 구성하고, Etherscan / Solscan 기반으로 토큰 및 가치를 한눈에
-          확인하세요.
+          그룹별로 지갑을 구성하고, 온체인 스캔 링크와 지원 API를 통해 토큰 및 가치를 한눈에 확인하세요.
         </p>
       </header>
 
@@ -56,11 +55,10 @@
 
     <template id="wallet-template">
       <div class="wallet-row">
-        <select class="source-select" aria-label="조회 소스 선택">
-          <option value="etherscan">Etherscan (Ethereum)</option>
-          <option value="solscan">Solscan (Solana)</option>
-        </select>
+        <select class="source-select" aria-label="조회 소스 선택"></select>
         <input type="text" class="wallet-input" placeholder="지갑 주소 입력" />
+        <a class="explorer-link" href="#" target="_blank" rel="noopener noreferrer">스캔 URL</a>
+        <a class="api-link" href="#" target="_blank" rel="noopener noreferrer">API URL</a>
         <button type="button" class="remove-wallet-btn">삭제</button>
       </div>
     </template>

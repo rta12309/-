@@ -21,7 +21,7 @@ body {
 }
 
 .container {
-  max-width: 1080px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 24px;
 }
@@ -86,9 +86,10 @@ button.primary {
 
 .wallet-row {
   display: grid;
-  grid-template-columns: 220px 1fr auto;
+  grid-template-columns: minmax(220px, 320px) minmax(220px, 1fr) auto auto auto;
   gap: 8px;
   margin-bottom: 8px;
+  align-items: center;
 }
 
 .wallet-row input,
@@ -96,6 +97,13 @@ button.primary {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 9px;
+}
+
+.wallet-row a {
+  text-decoration: none;
+  color: var(--primary);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .remove-group-btn,
