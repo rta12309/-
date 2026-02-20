@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>멀티체인 지갑 그룹 뷰어</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 0; background:#f6f8fb; color:#1d2433; }
+    body { font-family: "Pretendard", "Noto Sans KR", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background:#f6f8fb; color:#1d2433; }
     .wrap { max-width: 1200px; margin: 0 auto; padding: 20px; }
     h1 { margin-bottom: 6px; }
     .card { background: white; border-radius: 12px; padding: 16px; margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
@@ -22,6 +22,9 @@
     .token-list th, .token-list td { text-align:left; border-bottom:1px solid #eef2f9; padding:6px; font-size:14px; }
     .muted { color:#6c7486; font-size:13px; }
     .status { padding:4px 8px; border-radius:16px; background:#eef3ff; color:#3153b6; }
+    .group-total { font-size: 17px; font-weight: 700; margin-left: 8px; color:#23315c; }
+    .scan-link { font-size: 12px; font-family: "Inter", "Pretendard", sans-serif; letter-spacing: 0.1px; color:#52638f; text-decoration: none; border: 1px solid #dbe3f6; padding: 7px 9px; border-radius: 8px; background: #f8faff; }
+    .scan-link:hover { color:#2c468f; border-color:#b6c5ed; }
   </style>
 </head>
 <body>
@@ -33,6 +36,10 @@
     <div class="row">
       <button id="addGroup">+ 그룹 추가</button>
       <button id="refreshAll" class="subtle">전체 새로고침</button>
+      <label class="muted">자동 새로고침(초)
+        <input id="autoRefreshSec" type="number" min="0" value="0" style="width:90px; margin-left:6px;" />
+      </label>
+      <button id="applyAutoRefresh" class="subtle">적용</button>
       <span id="fx" class="status">환율 로딩중...</span>
     </div>
     <p class="muted">EVM 체인은 각 스캔 API 응답 기준(토큰 홀딩 목록)으로 불러옵니다. 일부 체인은 스캔 정책(CORS/API 제한)에 따라 브라우저에서 조회가 제한될 수 있습니다.</p>
@@ -57,6 +64,7 @@ const NATIVE_SYMBOL = { ethereum:'ETH', bnb:'BNB', base:'ETH', arbitrum:'ETH', o
 const STORAGE_KEY = 'wallet-group-viewer-v1';
 let state = loadState();
 let usdtKrw = 0;
+let autoRefreshTimer = null;
 
 function loadState() {
   try {
@@ -70,6 +78,11 @@ function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 function formatEok(krw) {
   if (!Number.isFinite(krw)) return '-';
   return (krw / 100000000).toFixed(2) + '억';
+}
+
+function formatUsd(usd) {
+  if (!Number.isFinite(usd)) return '-';
+  return '$' + usd.toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
 function isValidAddress(chain, address) {
@@ -114,8 +127,10 @@ async function fetchEvmHoldings(chain, address) {
 
   if (tRes.status === 'fulfilled' && Array.isArray(tRes.value?.result)) {
     for (const t of tRes.value.result) {
-      const decimals = Number(t.TokenDivisor || t.tokenDecimal || 18);
-      const qty = Number(t.TokenQuantity || t.balance || 0) / Math.pow(10, decimals);
+      const rawDecimals = t.TokenDivisor ?? t.tokenDecimal ?? 18;
+      const decimals = Number(rawDecimals);
+      const rawQty = t.TokenQuantity ?? t.balance ?? 0;
+      const qty = Number(rawQty) / Math.pow(10, Number.isFinite(decimals) ? decimals : 18);
       if (!qty) continue;
       rows.push({
         symbol: t.TokenSymbol || t.tokenSymbol || 'UNKNOWN',
@@ -210,6 +225,32 @@ function calcTotalKrw(tokens) {
   return tokens.reduce((sum, t) => sum + (t.amount * (t.usd || 0) * usdtKrw), 0);
 }
 
+function calcTotalUsd(tokens) {
+  return tokens.reduce((sum, t) => sum + (t.amount * (t.usd || 0)), 0);
+}
+
+async function refreshAllWallets() {
+  await loadFx();
+  for (let gi=0; gi<state.groups.length; gi++) {
+    for (let wi=0; wi<state.groups[gi].wallets.length; wi++) {
+      if (isValidAddress(state.groups[gi].wallets[wi].chain, state.groups[gi].wallets[wi].address)) {
+        await loadWallet(gi, wi);
+      }
+    }
+  }
+}
+
+function applyAutoRefresh() {
+  const sec = Number(document.getElementById('autoRefreshSec').value || 0);
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+  if (sec > 0) {
+    autoRefreshTimer = setInterval(refreshAllWallets, sec * 1000);
+  }
+}
+
 function render() {
   const root = document.getElementById('groups');
   root.innerHTML = '';
@@ -217,13 +258,14 @@ function render() {
   state.groups.forEach((group, gi) => {
     const card = document.createElement('div');
     card.className = 'card';
-    const total = group.wallets.reduce((acc,w) => acc + calcTotalKrw(w.tokens || []), 0);
+    const totalKrw = group.wallets.reduce((acc,w) => acc + calcTotalKrw(w.tokens || []), 0);
+    const totalUsd = group.wallets.reduce((acc,w) => acc + calcTotalUsd(w.tokens || []), 0);
 
     card.innerHTML = `
       <div class="group-title">
         <div>
           <input value="${group.name}" data-gi="${gi}" data-role="groupName" />
-          <span class="muted">그룹 합계: ${formatEok(total)}</span>
+          <span class="group-total">그룹 합계: ${formatEok(totalKrw)} / ${formatUsd(totalUsd)}</span>
         </div>
         <div class="row">
           <button class="subtle" data-role="addWallet" data-gi="${gi}">+ 지갑 추가</button>
@@ -245,7 +287,7 @@ function render() {
             ${Object.entries(CHAIN_CONFIG).map(([k,v]) => `<option value="${k}" ${w.chain===k?'selected':''}>${v.label}</option>`).join('')}
           </select>
           <input class="mono" style="min-width:360px" value="${w.address || ''}" placeholder="지갑 주소" data-role="addr" data-gi="${gi}" data-wi="${wi}" />
-          <a href="${scanUrl}" target="_blank" rel="noopener">스캔 URL 열기</a>
+          <a class="scan-link" href="${scanUrl}" target="_blank" rel="noopener">스캔 URL 열기</a>
           <button data-role="load" data-gi="${gi}" data-wi="${wi}">${loadingText}</button>
           <button class="danger" data-role="delWallet" data-gi="${gi}" data-wi="${wi}">지갑 삭제</button>
         </div>
@@ -319,16 +361,8 @@ document.getElementById('addGroup').onclick = () => {
   saveState(); render();
 };
 
-document.getElementById('refreshAll').onclick = async () => {
-  await loadFx();
-  for (let gi=0; gi<state.groups.length; gi++) {
-    for (let wi=0; wi<state.groups[gi].wallets.length; wi++) {
-      if (isValidAddress(state.groups[gi].wallets[wi].chain, state.groups[gi].wallets[wi].address)) {
-        await loadWallet(gi, wi);
-      }
-    }
-  }
-};
+document.getElementById('refreshAll').onclick = refreshAllWallets;
+document.getElementById('applyAutoRefresh').onclick = applyAutoRefresh;
 
 if (!state.groups.length) {
   state.groups.push({ name:'그룹 1', wallets:[{ chain:'ethereum', address:'', tokens:[] }] });
