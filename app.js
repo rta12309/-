@@ -121,7 +121,13 @@ function init() {
   elements.analyzeAllBtn.addEventListener('click', analyzeAllGroups);
 
   createGroup('기본 그룹');
-  loadUpbitRate();
+
+  if (window.location.protocol === 'file:') {
+    elements.fxRateDisplay.textContent =
+      '파일 직접 실행 모드입니다. 버튼은 동작하지만 환율/온체인 API 조회는 브라우저 CORS 정책으로 차단될 수 있습니다. (권장: python3 -m http.server 4173)';
+  } else {
+    loadUpbitRate();
+  }
 }
 
 if (document.readyState === 'loading') {
