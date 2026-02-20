@@ -106,6 +106,12 @@ button.primary {
   white-space: nowrap;
 }
 
+.link-disabled {
+  color: var(--muted) !important;
+  pointer-events: none;
+  text-decoration: line-through;
+}
+
 .remove-group-btn,
 .remove-wallet-btn {
   color: var(--danger);

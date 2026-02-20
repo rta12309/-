@@ -98,6 +98,7 @@ let initialized = false;
 
 function init() {
   if (initialized) return;
+
   elements = {
     groupList: document.getElementById('group-list'),
     addGroupBtn: document.getElementById('add-group-btn'),
@@ -108,8 +109,7 @@ function init() {
     walletTemplate: document.getElementById('wallet-template'),
   };
 
-  const required = Object.values(elements).every(Boolean);
-  if (!required) {
+  if (!Object.values(elements).every(Boolean)) {
     console.error('필수 UI 요소를 찾을 수 없습니다.');
     return;
   }
@@ -124,7 +124,7 @@ function init() {
 
   if (window.location.protocol === 'file:') {
     elements.fxRateDisplay.textContent =
-      '파일 직접 실행 모드입니다. 버튼은 동작하지만 환율/온체인 API 조회는 브라우저 CORS 정책으로 차단될 수 있습니다. (권장: python3 -m http.server 4173)';
+      '현재 파일 직접 실행 모드(file://)입니다. API 차단(CORS)으로 조회가 안 될 수 있어요. 아래 실행 파일(run_local_server)이나 python 명령으로 여는 것을 권장합니다.';
   } else {
     loadUpbitRate();
   }
@@ -179,9 +179,19 @@ function createWalletRow() {
   const updateLinks = () => {
     const source = getSourceConfig(sourceSelect.value);
     const address = walletInput.value.trim();
-    const safeAddress = address || '{address}';
-    explorerLink.href = `${source.explorerBase}${encodeURIComponent(safeAddress)}`;
-    apiLink.href = source.apiExample.replace('{address}', encodeURIComponent(safeAddress));
+    const valid = isValidAddress(source.chain, address);
+
+    if (!address || !valid) {
+      setLinkDisabled(explorerLink, true, '주소를 입력하면 스캔 URL이 활성화됩니다.');
+      setLinkDisabled(apiLink, true, '유효한 주소를 입력하면 API URL이 활성화됩니다.');
+      return;
+    }
+
+    setLinkDisabled(explorerLink, false);
+    setLinkDisabled(apiLink, false);
+
+    explorerLink.href = `${source.explorerBase}${encodeURIComponent(address)}`;
+    apiLink.href = source.apiExample.replace('{address}', encodeURIComponent(address));
   };
 
   sourceSelect.addEventListener('change', updateLinks);
@@ -192,8 +202,41 @@ function createWalletRow() {
   return row;
 }
 
+function setLinkDisabled(linkEl, disabled, title = '') {
+  if (disabled) {
+    linkEl.href = '#';
+    linkEl.classList.add('link-disabled');
+    linkEl.setAttribute('aria-disabled', 'true');
+    linkEl.title = title;
+  } else {
+    linkEl.classList.remove('link-disabled');
+    linkEl.removeAttribute('aria-disabled');
+    linkEl.removeAttribute('title');
+  }
+}
+
 function getSourceConfig(key) {
   return SOURCES.find((source) => source.key === key) || SOURCES[0];
+}
+
+function isValidAddress(chain, address) {
+  if (!address) return false;
+
+  const checks = {
+    ethereum: /^0x[a-fA-F0-9]{40}$/,
+    bsc: /^0x[a-fA-F0-9]{40}$/,
+    polygon: /^0x[a-fA-F0-9]{40}$/,
+    arbitrum: /^0x[a-fA-F0-9]{40}$/,
+    optimism: /^0x[a-fA-F0-9]{40}$/,
+    avalanche: /^0x[a-fA-F0-9]{40}$/,
+    base: /^0x[a-fA-F0-9]{40}$/,
+    solana: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/,
+    tron: /^T[1-9A-HJ-NP-Za-km-z]{33}$/,
+    bitcoin: /^(bc1[ac-hj-np-z02-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/,
+  };
+
+  const rule = checks[chain];
+  return rule ? rule.test(address) : address.length > 0;
 }
 
 async function loadUpbitRate() {
@@ -213,7 +256,7 @@ async function loadUpbitRate() {
     elements.fxRateDisplay.textContent = `업비트 KRW-USDT: ${formatNumber(usdtKrwRate, 2)} KRW`;
   } catch (error) {
     usdtKrwRate = 0;
-    elements.fxRateDisplay.textContent = `환율 조회 실패: ${error.message}`;
+    elements.fxRateDisplay.textContent = `환율 조회 실패: ${normalizeErrorMessage(error)}`;
   }
 }
 
@@ -272,8 +315,12 @@ async function analyzeGroup(groupNode) {
     groupResults.appendChild(resultWrap);
 
     try {
+      if (!isValidAddress(sourceConfig.chain, address)) {
+        throw new Error('주소 형식이 올바르지 않습니다. 체인과 주소를 다시 확인해 주세요.');
+      }
+
       if (!sourceConfig.fetcher) {
-        throw new Error('현재는 링크 제공만 지원합니다. API 통합은 준비 중입니다.');
+        throw new Error('이 체인은 현재 스캔/API 링크 제공만 지원합니다.');
       }
 
       const tokenData = await sourceConfig.fetcher(address);
@@ -281,7 +328,7 @@ async function analyzeGroup(groupNode) {
       groupTotalUsdt += walletUsdt;
       renderWalletResult(resultWrap, tokenData, walletUsdt, sourceConfig.label, address);
     } catch (error) {
-      renderWalletError(resultWrap, sourceConfig.label, address, error.message);
+      renderWalletError(resultWrap, sourceConfig.label, address, normalizeErrorMessage(error));
     }
   }
 
@@ -294,6 +341,14 @@ async function analyzeGroup(groupNode) {
     empty.textContent = '입력된 지갑 주소가 없습니다.';
     groupResults.appendChild(empty);
   }
+}
+
+function normalizeErrorMessage(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
+    return '네트워크/CORS로 API 호출이 차단되었습니다. run_local_server 또는 python 서버로 실행해 주세요.';
+  }
+  return message;
 }
 
 function renderWalletResult(container, tokens, walletUsdt, sourceLabel, address) {
