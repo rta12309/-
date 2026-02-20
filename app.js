@@ -1,5 +1,6 @@
 const MAX_WALLETS_PER_GROUP = 10;
 const MIN_AUTO_REFRESH_SECONDS = 5;
+const ETHERSCAN_V2_ENDPOINT = 'https://api.etherscan.io/v2/api';
 
 const enabled = {
   upbit: true,
@@ -12,7 +13,7 @@ const SOURCES = [
     chain: 'ethereum',
     explorerBase: 'https://etherscan.io/address/',
     apiExample: 'https://api.ethplorer.io/getAddressInfo/{address}?apiKey=freekey',
-    fetcher: fetchEthereumWallet,
+    fetcher: (address) => fetchEvmWallet(address, '1', 'https://cloudflare-eth.com', 'ethereum', 'ETH'),
   },
   {
     key: 'solana',
@@ -29,7 +30,7 @@ const SOURCES = [
     chain: 'bsc',
     explorerBase: 'https://bscscan.com/address/',
     apiExample: 'https://bsc-dataseed.binance.org (eth_getBalance)',
-    fetcher: (address) => fetchEvmNativeWallet(address, 'https://bsc-dataseed.binance.org', 'binancecoin', 'BNB'),
+    fetcher: (address) => fetchEvmWallet(address, '56', 'https://bsc-dataseed.binance.org', 'binancecoin', 'BNB'),
   },
   {
     key: 'polygon',
@@ -37,7 +38,7 @@ const SOURCES = [
     chain: 'polygon',
     explorerBase: 'https://polygonscan.com/address/',
     apiExample: 'https://polygon-rpc.com (eth_getBalance)',
-    fetcher: (address) => fetchEvmNativeWallet(address, 'https://polygon-rpc.com', 'matic-network', 'MATIC'),
+    fetcher: (address) => fetchEvmWallet(address, '137', 'https://polygon-rpc.com', 'matic-network', 'MATIC'),
   },
   {
     key: 'arbitrum',
@@ -45,7 +46,7 @@ const SOURCES = [
     chain: 'arbitrum',
     explorerBase: 'https://arbiscan.io/address/',
     apiExample: 'https://arb1.arbitrum.io/rpc (eth_getBalance)',
-    fetcher: (address) => fetchEvmNativeWallet(address, 'https://arb1.arbitrum.io/rpc', 'ethereum', 'ETH'),
+    fetcher: (address) => fetchEvmWallet(address, '42161', 'https://arb1.arbitrum.io/rpc', 'ethereum', 'ETH'),
   },
   {
     key: 'optimism',
@@ -53,7 +54,7 @@ const SOURCES = [
     chain: 'optimism',
     explorerBase: 'https://optimistic.etherscan.io/address/',
     apiExample: 'https://mainnet.optimism.io (eth_getBalance)',
-    fetcher: (address) => fetchEvmNativeWallet(address, 'https://mainnet.optimism.io', 'ethereum', 'ETH'),
+    fetcher: (address) => fetchEvmWallet(address, '10', 'https://mainnet.optimism.io', 'ethereum', 'ETH'),
   },
   {
     key: 'avalanche',
@@ -62,7 +63,7 @@ const SOURCES = [
     explorerBase: 'https://snowtrace.io/address/',
     apiExample: 'https://api.avax.network/ext/bc/C/rpc (eth_getBalance)',
     fetcher: (address) =>
-      fetchEvmNativeWallet(address, 'https://api.avax.network/ext/bc/C/rpc', 'avalanche-2', 'AVAX'),
+      fetchEvmWallet(address, '43114', 'https://api.avax.network/ext/bc/C/rpc', 'avalanche-2', 'AVAX'),
   },
   {
     key: 'base',
@@ -70,7 +71,7 @@ const SOURCES = [
     chain: 'base',
     explorerBase: 'https://basescan.org/address/',
     apiExample: 'https://mainnet.base.org (eth_getBalance)',
-    fetcher: (address) => fetchEvmNativeWallet(address, 'https://mainnet.base.org', 'ethereum', 'ETH'),
+    fetcher: (address) => fetchEvmWallet(address, '8453', 'https://mainnet.base.org', 'ethereum', 'ETH'),
   },
   {
     key: 'tron',
@@ -429,27 +430,6 @@ function renderWalletError(container, sourceLabel, address, message) {
   container.replaceChildren(createWalletHeader(sourceLabel, address), error);
 }
 
-async function fetchEthereumWallet(address) {
-  const data = await safeFetchJson(
-    `https://api.ethplorer.io/getAddressInfo/${encodeURIComponent(address)}?apiKey=freekey`
-  );
-  const tokens = data.tokens || [];
-
-  return tokens
-    .map(({ tokenInfo, balance }) => {
-      const decimals = Number(tokenInfo.decimals || 0);
-      const amount = Number(balance) / 10 ** decimals;
-      const priceUsd = Number(tokenInfo.price?.rate || 0);
-      return {
-        symbol: tokenInfo.symbol || tokenInfo.name || 'UNKNOWN',
-        amount,
-        priceUsd,
-        valueUsd: amount * priceUsd,
-      };
-    })
-    .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
-}
-
 async function fetchSolanaWallet(address) {
   const [tokenPayload, solPayload] = await Promise.all([
     safeFetchJson(
@@ -483,6 +463,42 @@ async function fetchSolanaWallet(address) {
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
 }
 
+async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
+  const [explorerTokens, nativeTokens] = await Promise.all([
+    fetchExplorerTokenBalances(chainId, address),
+    fetchEvmNativeWallet(address, rpcUrl, geckoId, symbol),
+  ]);
+
+  return [...nativeTokens, ...explorerTokens].filter(
+    (token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd)
+  );
+}
+
+async function fetchExplorerTokenBalances(chainId, address) {
+  const url = `${ETHERSCAN_V2_ENDPOINT}?chainid=${chainId}&module=account&action=addresstokenbalance&address=${encodeURIComponent(
+    address
+  )}&page=1&offset=200`;
+
+  const payload = await safeFetchJson(url);
+  const rows = Array.isArray(payload?.result) ? payload.result : [];
+
+  return rows
+    .map((row) => {
+      const decimals = Number(row.TokenDivisor || row.tokenDecimal || 0);
+      const rawQty = row.TokenQuantity ?? row.balance ?? 0;
+      const amount = decimals > 0 ? Number(rawQty) / 10 ** decimals : Number(rawQty || 0);
+      const priceUsd = Number(row.TokenPriceUSD || row.tokenPriceUSD || 0);
+
+      return {
+        symbol: row.TokenSymbol || row.tokenSymbol || row.TokenName || row.tokenName || 'UNKNOWN',
+        amount,
+        priceUsd,
+        valueUsd: amount * priceUsd,
+      };
+    })
+    .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+}
+
 async function fetchEvmNativeWallet(address, rpcUrl, geckoId, symbol) {
   const [rpcPayload, pricePayload] = await Promise.all([
     safeFetchJson(rpcUrl, {
@@ -498,7 +514,7 @@ async function fetchEvmNativeWallet(address, rpcUrl, geckoId, symbol) {
     throw new Error('RPC 잔액 조회 실패');
   }
 
-  const amount = Number(BigInt(weiHex) / 10n ** 10n) / 10 ** 8;
+  const amount = Number(BigInt(weiHex)) / 1e18;
   const priceUsd = Number(pricePayload?.[geckoId]?.usd || 0);
 
   return [
@@ -508,7 +524,7 @@ async function fetchEvmNativeWallet(address, rpcUrl, geckoId, symbol) {
       priceUsd,
       valueUsd: amount * priceUsd,
     },
-  ].filter((token) => token.amount > 0 && Number.isFinite(token.valueUsd));
+  ];
 }
 
 async function fetchTronWallet(address) {
