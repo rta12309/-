@@ -1,8 +1,23 @@
 @echo off
 cd /d %~dp0
-if not exist node_modules (
-  echo [INFO] Installing dependencies...
-  call npm install
+set PORT=8787
+where python >nul 2>nul
+if %errorlevel%==0 (
+  start http://localhost:%PORT%
+  python -m http.server %PORT%
+  goto :eof
 )
-start http://localhost:5173
-call npm run dev
+where py >nul 2>nul
+if %errorlevel%==0 (
+  start http://localhost:%PORT%
+  py -m http.server %PORT%
+  goto :eof
+)
+where npx >nul 2>nul
+if %errorlevel%==0 (
+  start http://localhost:%PORT%
+  npx --yes serve -l %PORT% .
+  goto :eof
+)
+echo Python or npx is required to run local server.
+pause
