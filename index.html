@@ -21,47 +21,28 @@
 </head>
 <body>
   <h2>ChainScan 조건 지갑 필터 (웹 실행)</h2>
-  <p class="muted">설치 없이 브라우저에서 바로 실행됩니다. API Key 없이도 실행 가능(속도/제한 가능)합니다.</p>
+  <p class="muted">설치 없이 브라우저에서 바로 실행됩니다. 각 탐색 조건을 ON/OFF 하면서 결과 0건 원인을 쉽게 확인할 수 있습니다.</p>
 
   <div class="grid">
-    <div class="row"><label>체인</label><select id="chain">
-      <option value="ethereum">ethereum</option>
-      <option value="bsc">bsc</option>
-      <option value="polygon">polygon</option>
-      <option value="arbitrum">arbitrum</option>
-      <option value="optimism">optimism</option>
-    </select></div>
-
+    <div class="row"><label>체인</label><select id="chain"><option value="ethereum">ethereum</option><option value="bsc">bsc</option><option value="polygon">polygon</option><option value="arbitrum">arbitrum</option><option value="optimism">optimism</option></select></div>
     <div class="row"><label>토큰 티커 (예: USDT)</label><input id="ticker" value="USDT" /></div>
     <div class="row"><label>토큰 CA 주소(선택, 티커 옆)</label><input id="tokenAddress" placeholder="0x... (비우면 티커로 자동 탐색)" /></div>
 
-    <div class="row">
-      <label>기준 날짜/시간 UTC (분 단위 기본값 포함)</label>
-      <input id="since" type="datetime-local" value="2025-01-01T00:00" />
-      <div class="help">예: 2025-01-01 00:00 (초 입력 없이 분 단위까지)</div>
-    </div>
+    <div class="row"><label>기준 날짜/시간 UTC</label><input id="since" type="datetime-local" value="2025-01-01T00:00" /><div class="help">분 단위 기본값 사용</div></div>
+    <div class="row"><label>Scan API Key (선택)</label><input id="apiKey" placeholder="비워도 실행 가능" /><div class="help">키가 있으면 속도/한도 측면에서 유리</div></div>
 
-    <div class="row">
-      <label>Scan API Key (선택)</label>
-      <input id="apiKey" placeholder="비워도 실행 가능. 입력하면 더 안정적일 수 있음" />
-      <div class="help">공식 Explorer API 키가 있으면 속도/호출 한도 측면에서 유리합니다.</div>
-    </div>
+    <div class="row"><label>홀드 수량 Decimals</label><input id="decimals" type="number" value="18" /><div class="help">USDT 보통 6, 대부분 ERC-20 보통 18</div></div>
+    <div class="row"><label>홀더 수량이 raw 값이면 체크</label><select id="isRaw"><option value="false">false</option><option value="true">true</option></select><div class="help">예: 1 USDT(6 decimals)=1000000(raw)</div></div>
 
-    <div class="row">
-      <label>홀드 수량 Decimals</label>
-      <input id="decimals" type="number" value="18" />
-      <div class="help">토큰 수량 소수점 자리수입니다. 예: USDT는 보통 6, ETH 계열 토큰은 보통 18.</div>
-    </div>
-
-    <div class="row">
-      <label>홀더 수량이 raw 값이면 체크</label>
-      <select id="isRaw"><option value="false">false</option><option value="true">true</option></select>
-      <div class="help">raw 값은 사람이 읽기 전 정수값입니다. 예: 1 USDT(6 decimals) = 1000000.</div>
-    </div>
-
+    <div class="row"><label>[조건 ON/OFF] USD 보유가치 범위 사용</label><select id="useUsdFilter"><option value="true">ON</option><option value="false">OFF</option></select></div>
     <div class="row"><label>최소 USD</label><input id="minUsd" type="number" value="300000" /></div>
     <div class="row"><label>최대 USD</label><input id="maxUsd" type="number" value="30000000" /></div>
+
+    <div class="row"><label>[조건 ON/OFF] 첫 트랜잭션이 기준시각 이후</label><select id="useSinceFirstTx"><option value="true">ON</option><option value="false">OFF</option></select></div>
+    <div class="row"><label>[조건 ON/OFF] 입금 비율 조건</label><select id="useInboundRatio"><option value="true">ON</option><option value="false">OFF</option></select></div>
     <div class="row"><label>입금 비율 임계치</label><input id="inboundRatio" type="number" step="0.01" value="0.8" /></div>
+
+    <div class="row"><label>[조건 ON/OFF] 최소 송신자 수 조건</label><select id="useUniqueSenders"><option value="true">ON</option><option value="false">OFF</option></select></div>
     <div class="row"><label>최소 송신자 수</label><input id="minSenders" type="number" value="3" /></div>
     <div class="row"><label>홀더 조회 페이지 수</label><input id="maxPages" type="number" value="10" /></div>
   </div>
@@ -69,14 +50,9 @@
   <button id="runBtn">스캔 실행</button>
   <button id="downloadBtn" disabled>CSV 다운로드</button>
 
-  <h3>로그</h3>
-  <div id="log"></div>
-
+  <h3>로그</h3><div id="log"></div>
   <h3>결과</h3>
-  <table id="resultTable">
-    <thead><tr><th>address</th><th>token_amount</th><th>usd_value</th><th>tx_count_after_since</th><th>inbound_ratio</th><th>unique_senders</th></tr></thead>
-    <tbody></tbody>
-  </table>
+  <table id="resultTable"><thead><tr><th>address</th><th>token_amount</th><th>usd_value</th><th>tx_count_after_since</th><th>inbound_ratio</th><th>unique_senders</th></tr></thead><tbody></tbody></table>
 
   <script>
     const SCAN_CONFIG = {
@@ -86,17 +62,13 @@
       arbitrum: { apiBase: "https://api.arbiscan.io/api", cgPlatform: "arbitrum-one" },
       optimism: { apiBase: "https://api-optimistic.etherscan.io/api", cgPlatform: "optimistic-ethereum" },
     };
-
     let latestSignals = [];
     const logEl = document.getElementById("log");
     const tbody = document.querySelector("#resultTable tbody");
     const runBtn = document.getElementById("runBtn");
     const downloadBtn = document.getElementById("downloadBtn");
-
-    function log(msg) {
-      logEl.textContent += `${msg}\n`;
-      logEl.scrollTop = logEl.scrollHeight;
-    }
+    const on = (id) => document.getElementById(id).value === "true";
+    const log = (msg) => { logEl.textContent += `${msg}\n`; logEl.scrollTop = logEl.scrollHeight; };
 
     function parseSince(value) {
       if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return Math.floor(new Date(`${value}T00:00:00Z`).getTime() / 1000);
@@ -107,33 +79,25 @@
 
     async function scanCall(chain, apiKey, params) {
       const url = new URL(SCAN_CONFIG[chain].apiBase);
-      const payload = { ...params };
-      if (apiKey) payload.apikey = apiKey;
+      const payload = { ...params }; if (apiKey) payload.apikey = apiKey;
       Object.entries(payload).forEach(([k, v]) => url.searchParams.set(k, v));
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`scan api http error ${res.status}`);
+      const res = await fetch(url); if (!res.ok) throw new Error(`scan api http error ${res.status}`);
       const data = await res.json();
-      if (String(data.status) === "0" && (data.result === "" || data.result == null)) {
-        throw new Error(`scan api error: ${data.message} / ${data.result}`);
-      }
+      if (String(data.status) === "0" && (data.result === "" || data.result == null)) throw new Error(`scan api error: ${data.message} / ${data.result}`);
       return data.result;
     }
 
     async function resolveTokenAddress(chain, ticker) {
       const platform = SCAN_CONFIG[chain].cgPlatform;
-      const listRes = await fetch("https://api.coingecko.com/api/v3/coins/list?include_platform=true");
-      const coins = await listRes.json();
+      const coins = await (await fetch("https://api.coingecko.com/api/v3/coins/list?include_platform=true")).json();
       const matches = coins.filter(c => (c.symbol || "").toLowerCase() === ticker.toLowerCase() && c.platforms && c.platforms[platform]);
       if (!matches.length) throw new Error(`CoinGecko에서 ${chain}:${ticker}를 찾지 못했습니다.`);
-
       let best = null;
       for (const coin of matches.slice(0, 20)) {
-        const detailRes = await fetch(`https://api.coingecko.com/api/v3/coins/${coin.id}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false`);
-        const detail = await detailRes.json();
+        const detail = await (await fetch(`https://api.coingecko.com/api/v3/coins/${coin.id}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false`)).json();
         const marketCap = Number(detail?.market_data?.market_cap?.usd || 0);
         const contract = detail?.platforms?.[platform];
-        if (!contract) continue;
-        if (!best || marketCap > best.marketCap) best = { contract, marketCap };
+        if (contract && (!best || marketCap > best.marketCap)) best = { contract, marketCap };
       }
       if (!best) throw new Error("토큰 주소 자동 탐색 실패");
       return best.contract;
@@ -142,26 +106,22 @@
     async function getTokenPrice(chain, contract) {
       const platform = SCAN_CONFIG[chain].cgPlatform;
       const u = new URL(`https://api.coingecko.com/api/v3/simple/token_price/${platform}`);
-      u.searchParams.set("contract_addresses", contract);
-      u.searchParams.set("vs_currencies", "usd");
-      const res = await fetch(u);
-      const data = await res.json();
-      const key = contract.toLowerCase();
-      const price = data?.[key]?.usd ?? data?.[contract]?.usd;
+      u.searchParams.set("contract_addresses", contract); u.searchParams.set("vs_currencies", "usd");
+      const data = await (await fetch(u)).json();
+      const price = data?.[contract.toLowerCase()]?.usd ?? data?.[contract]?.usd;
       if (price == null) throw new Error("토큰 가격 조회 실패");
       return Number(price);
     }
 
     function normalizeAmount(quantity, decimals, isRaw) {
-      const n = Number(quantity);
-      return isRaw ? n / Math.pow(10, decimals) : n;
+      const n = Number(quantity); return isRaw ? n / Math.pow(10, decimals) : n;
     }
 
-    function passBehavior(txs, address, sinceTs, inboundRatioThreshold, minSenders) {
+    function passBehavior(txs, address, sinceTs, settings) {
       if (!Array.isArray(txs) || !txs.length) return null;
       const times = txs.map(t => Number(t.timeStamp || 0)).filter(Boolean);
       if (!times.length) return null;
-      if (Math.min(...times) < sinceTs) return null;
+      if (settings.useSinceFirstTx && Math.min(...times) < sinceTs) return null;
 
       const after = txs.filter(t => Number(t.timeStamp || 0) >= sinceTs);
       if (!after.length) return null;
@@ -170,7 +130,9 @@
       const inbound = after.filter(t => String(t.to || "").toLowerCase() === addr);
       const inboundRatio = inbound.length / after.length;
       const uniqueSenders = new Set(inbound.map(t => String(t.from || "").toLowerCase()).filter(Boolean)).size;
-      if (inboundRatio < inboundRatioThreshold || uniqueSenders < minSenders) return null;
+
+      if (settings.useInboundRatio && inboundRatio < settings.inboundRatioThreshold) return null;
+      if (settings.useUniqueSenders && uniqueSenders < settings.minSenders) return null;
 
       return { txCountAfterSince: after.length, inboundRatio, uniqueSenders };
     }
@@ -189,100 +151,70 @@
       const rows = signals.map(s => [s.address, s.token_amount, s.usd_value, s.tx_count_after_since, s.inbound_ratio, s.unique_senders]);
       const csv = [header, ...rows].map(r => r.join(",")).join("\n");
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "wallet_signals.csv";
-      a.click();
-      URL.revokeObjectURL(a.href);
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "wallet_signals.csv"; a.click(); URL.revokeObjectURL(a.href);
     }
 
     runBtn.onclick = async () => {
-      latestSignals = [];
-      downloadBtn.disabled = true;
-      tbody.innerHTML = "";
-      logEl.textContent = "";
-
+      latestSignals = []; downloadBtn.disabled = true; tbody.innerHTML = ""; logEl.textContent = "";
       try {
         runBtn.disabled = true;
         const chain = document.getElementById("chain").value;
         const ticker = document.getElementById("ticker").value.trim();
         const apiKey = document.getElementById("apiKey").value.trim();
-        const since = document.getElementById("since").value.trim();
+        const sinceTs = parseSince(document.getElementById("since").value.trim());
         const inputTokenAddress = document.getElementById("tokenAddress").value.trim();
         const decimals = Number(document.getElementById("decimals").value || 18);
         const isRaw = document.getElementById("isRaw").value === "true";
         const minUsd = Number(document.getElementById("minUsd").value);
         const maxUsd = Number(document.getElementById("maxUsd").value);
-        const inboundRatioThreshold = Number(document.getElementById("inboundRatio").value);
-        const minSenders = Number(document.getElementById("minSenders").value);
+        const settings = {
+          useUsdFilter: on("useUsdFilter"),
+          useSinceFirstTx: on("useSinceFirstTx"),
+          useInboundRatio: on("useInboundRatio"),
+          useUniqueSenders: on("useUniqueSenders"),
+          inboundRatioThreshold: Number(document.getElementById("inboundRatio").value),
+          minSenders: Number(document.getElementById("minSenders").value),
+        };
         const maxPages = Number(document.getElementById("maxPages").value);
 
-        const sinceTs = parseSince(since);
+        log(`[INFO] condition toggles => USD:${settings.useUsdFilter}, firstTxSince:${settings.useSinceFirstTx}, inboundRatio:${settings.useInboundRatio}, uniqueSenders:${settings.useUniqueSenders}`);
         if (!apiKey) log("[INFO] API Key 없이 실행합니다. 체인 API 제한이 더 빨리 걸릴 수 있습니다.");
 
         const tokenAddress = inputTokenAddress || await resolveTokenAddress(chain, ticker);
         log(`[INFO] tokenAddress=${tokenAddress}`);
-
         const price = await getTokenPrice(chain, tokenAddress);
         log(`[INFO] tokenPriceUsd=${price}`);
 
         const holders = [];
         for (let page = 1; page <= maxPages; page++) {
-          const result = await scanCall(chain, apiKey, {
-            module: "token",
-            action: "tokenholderlist",
-            contractaddress: tokenAddress,
-            page,
-            offset: 100,
-          });
+          const result = await scanCall(chain, apiKey, { module: "token", action: "tokenholderlist", contractaddress: tokenAddress, page, offset: 100 });
           if (!Array.isArray(result) || result.length === 0) break;
-          holders.push(...result);
-          log(`[INFO] holders page ${page}, total=${holders.length}`);
+          holders.push(...result); log(`[INFO] holders page ${page}, total=${holders.length}`);
           if (result.length < 100) break;
         }
 
-        const candidates = holders
-          .map(h => {
-            const address = h.TokenHolderAddress || h.address;
-            const amount = normalizeAmount(h.TokenHolderQuantity ?? h.balance, decimals, isRaw);
-            const usdValue = amount * price;
-            return { address, token_amount: amount, usd_value: usdValue };
-          })
-          .filter(h => h.address && Number.isFinite(h.usd_value) && h.usd_value >= minUsd && h.usd_value <= maxUsd);
+        let candidates = holders.map(h => {
+          const address = h.TokenHolderAddress || h.address;
+          const amount = normalizeAmount(h.TokenHolderQuantity ?? h.balance, decimals, isRaw);
+          const usdValue = amount * price;
+          return { address, token_amount: amount, usd_value: usdValue };
+        }).filter(h => h.address && Number.isFinite(h.usd_value));
 
-        log(`[INFO] usd-filtered holders=${candidates.length}`);
+        if (settings.useUsdFilter) {
+          candidates = candidates.filter(h => h.usd_value >= minUsd && h.usd_value <= maxUsd);
+        }
+        log(`[INFO] candidate holders=${candidates.length}`);
 
         const signals = [];
         for (let i = 0; i < candidates.length; i++) {
           const c = candidates[i];
-          const txs = await scanCall(chain, apiKey, {
-            module: "account",
-            action: "tokentx",
-            contractaddress: tokenAddress,
-            address: c.address,
-            page: 1,
-            offset: 1000,
-            startblock: 0,
-            endblock: 99999999,
-            sort: "asc",
-          });
-          const pass = passBehavior(txs, c.address, sinceTs, inboundRatioThreshold, minSenders);
-          if (pass) {
-            signals.push({
-              address: c.address,
-              token_amount: c.token_amount,
-              usd_value: c.usd_value,
-              tx_count_after_since: pass.txCountAfterSince,
-              inbound_ratio: pass.inboundRatio,
-              unique_senders: pass.uniqueSenders,
-            });
-          }
+          const txs = await scanCall(chain, apiKey, { module: "account", action: "tokentx", contractaddress: tokenAddress, address: c.address, page: 1, offset: 1000, startblock: 0, endblock: 99999999, sort: "asc" });
+          const pass = passBehavior(txs, c.address, sinceTs, settings);
+          if (pass) signals.push({ address: c.address, token_amount: c.token_amount, usd_value: c.usd_value, tx_count_after_since: pass.txCountAfterSince, inbound_ratio: pass.inboundRatio, unique_senders: pass.uniqueSenders });
           if ((i + 1) % 10 === 0) log(`[INFO] analyzed ${i + 1}/${candidates.length}`);
         }
 
-        latestSignals = signals;
-        render(signals);
-        downloadBtn.disabled = signals.length === 0;
+        latestSignals = signals; render(signals); downloadBtn.disabled = signals.length === 0;
         log(`[DONE] signals=${signals.length}`);
       } catch (e) {
         log(`[ERROR] ${e.message}`);
