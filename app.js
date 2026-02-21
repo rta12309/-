@@ -21,6 +21,7 @@ const DEXSCREENER_CHAIN_KEYS = {
 };
 const COVALENT_SUPPORTED_CHAIN_IDS = new Set(['1', '10', '56', '137', '8453', '42161', '43114']);
 const COVALENT_API_KEY = 'ckey_demo';
+const ETHERSCAN_FREE_PLAN_LIMIT_RE = /Free API access is not supported for this chain/i;
 
 const enabled = {
   upbit: true,
@@ -388,6 +389,11 @@ function parseUpbitPrice(payload) {
     return 0;
   }
   return Number(payload[0]?.trade_price || 0);
+}
+
+function isEtherscanFreePlanLimitError(error) {
+  const message = normalizeErrorMessage(error);
+  return ETHERSCAN_FREE_PLAN_LIMIT_RE.test(message);
 }
 
 async function analyzeAllGroups(refreshFx = true) {
@@ -930,12 +936,12 @@ async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
     );
   }
 
-  if (explorerResult.status === 'rejected') {
+  if (explorerResult.status === 'rejected' && !isEtherscanFreePlanLimitError(explorerResult.reason)) {
     const explorerMessage = normalizeErrorMessage(explorerResult.reason);
     throw new Error(`토큰 조회 실패 [Explorer:${extractErrorCode(explorerMessage)}] ${explorerMessage}`);
   }
 
-  if (!explorerTokens.length) {
+  if (!explorerTokens.length && explorerResult.status !== 'rejected') {
     throw new Error('토큰 조회 실패 [Explorer:EMPTY] 탐색기 토큰 데이터가 비어 있습니다.');
   }
 
@@ -960,6 +966,7 @@ async function fetchExplorerTokenBalances(chainId, address) {
 
   let rows = [];
   let lastError = null;
+  let isPlanLimited = false;
   for (const url of candidates) {
     try {
       const payload = await safeFetchJsonGetWithFallback(url);
@@ -969,6 +976,10 @@ async function fetchExplorerTokenBalances(chainId, address) {
         break;
       }
     } catch (error) {
+      if (isEtherscanFreePlanLimitError(error)) {
+        isPlanLimited = true;
+        continue;
+      }
       lastError = error;
     }
   }
@@ -981,6 +992,10 @@ async function fetchExplorerTokenBalances(chainId, address) {
   if (!rows.length) {
     const transferFallback = await fetchEvmTokenBalancesFromTransfers(chainId, address).catch(() => []);
     if (transferFallback.length) return transferFallback;
+  }
+
+  if (!rows.length && isPlanLimited) {
+    throw new Error('API 응답 오류: Free API access is not supported for this chain.');
   }
 
   if (!rows.length && lastError) {
