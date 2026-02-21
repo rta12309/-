@@ -368,6 +368,8 @@ let usdtKrwRate = 0;
 let elements = null;
 let initialized = false;
 let autoAnalyzeTimer = null;
+let solanaTickerMapPromise = null;
+
 
 function init() {
   if (initialized) return;
@@ -768,6 +770,26 @@ async function fetchEthereumWalletFromEthplorer(address) {
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
 }
 
+async function getSolanaTickerMap() {
+  if (!solanaTickerMapPromise) {
+    solanaTickerMapPromise = safeFetchJson('https://token.jup.ag/all')
+      .then((tokens) => {
+        const map = new Map();
+        (Array.isArray(tokens) ? tokens : []).forEach((token) => {
+          const mint = token?.address;
+          const symbol = token?.symbol;
+          if (typeof mint === 'string' && mint && typeof symbol === 'string' && symbol) {
+            map.set(mint, symbol);
+          }
+        });
+        return map;
+      })
+      .catch(() => new Map());
+  }
+
+  return solanaTickerMapPromise;
+}
+
 async function fetchSolanaRpcWithFallback(body) {
   let lastError = null;
 
@@ -812,6 +834,7 @@ async function fetchSolanaWallet(address) {
     )];
 
     let mintPrices = {};
+    const tickerMap = await getSolanaTickerMap();
     if (mints.length) {
       try {
         const pricePayload = await safeFetchJson(
@@ -838,7 +861,7 @@ async function fetchSolanaWallet(address) {
         const priceUsd = Number(mintPrices?.[mint]?.price || 0);
 
         return {
-          symbol: mint.slice(0, 4) + '...' + mint.slice(-4),
+          symbol: tickerMap.get(mint) || mint.slice(0, 4) + '...' + mint.slice(-4),
           amount,
           priceUsd,
           valueUsd: amount * priceUsd,
@@ -987,12 +1010,23 @@ async function fetchExplorerTokenBalances(chainId, address) {
 }
 
 async function fetchBscTokenBalancesFromTransfers(address) {
-  const endpoint =
-    `${EXPLORER_V1_ENDPOINTS['56']}?module=account&action=tokentx&address=${encodeURIComponent(
-      address
-    )}&startblock=0&endblock=99999999&page=1&offset=1000&sort=asc`;
-  const payload = await safeFetchJson(endpoint);
-  const rows = parseExplorerRows(payload?.result);
+  const offset = 1000;
+  const maxPages = 20;
+  const rows = [];
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const endpoint =
+      `${EXPLORER_V1_ENDPOINTS['56']}?module=account&action=tokentx&address=${encodeURIComponent(
+        address
+      )}&startblock=0&endblock=99999999&page=${page}&offset=${offset}&sort=asc`;
+
+    const payload = await safeFetchJson(endpoint);
+    const pageRows = parseExplorerRows(payload?.result);
+    if (!pageRows.length) break;
+
+    rows.push(...pageRows);
+    if (pageRows.length < offset) break;
+  }
 
   const lowerAddress = address.toLowerCase();
   const byContract = new Map();
