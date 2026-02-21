@@ -499,6 +499,17 @@ function applyTickerFilter(tokens, tickerSet) {
   return tokens.filter((token) => tickerSet.has(String(token.symbol || '').toUpperCase()));
 }
 
+function normalizeFetchResult(result) {
+  if (Array.isArray(result)) return { tokens: result, warning: '' };
+  if (result && Array.isArray(result.tokens)) {
+    return {
+      tokens: result.tokens,
+      warning: typeof result.warning === 'string' ? result.warning : '',
+    };
+  }
+  return { tokens: [], warning: '' };
+}
+
 function createGroup(defaultName = '') {
   const node = elements.groupTemplate.content.firstElementChild.cloneNode(true);
   const nameInput = node.querySelector('.group-name');
@@ -772,11 +783,12 @@ async function analyzeGroup(groupNode) {
         throw new Error('주소 형식이 올바르지 않습니다. 체인과 주소를 다시 확인해 주세요.');
       }
 
-      const tokenData = await sourceConfig.fetcher(address);
+      const fetched = await sourceConfig.fetcher(address);
+      const { tokens: tokenData, warning } = normalizeFetchResult(fetched);
       const filteredTokens = applyTickerFilter(tokenData, tickerFilterSet);
       const walletUsdt = filteredTokens.reduce((sum, token) => sum + token.valueUsd, 0);
       groupTotalUsdt += walletUsdt;
-      renderWalletResult(resultWrap, filteredTokens, walletUsdt, sourceConfig.label, address, tickerFilterSet);
+      renderWalletResult(resultWrap, filteredTokens, walletUsdt, sourceConfig.label, address, tickerFilterSet, warning);
     } catch (error) {
       renderWalletError(resultWrap, sourceConfig.label, address, normalizeErrorMessage(error));
     }
@@ -827,15 +839,21 @@ function normalizeErrorMessage(error) {
   return message;
 }
 
-function renderWalletResult(container, tokens, walletUsdt, sourceLabel, address, tickerFilterSet = null) {
+function renderWalletResult(container, tokens, walletUsdt, sourceLabel, address, tickerFilterSet = null, warning = '') {
   const header = createWalletHeader(sourceLabel, address);
+  const warningEl = warning
+    ? Object.assign(document.createElement('p'), {
+        className: 'empty-msg',
+        textContent: `참고: ${warning}`,
+      })
+    : null;
   if (!tokens.length) {
     const empty = document.createElement('p');
     empty.className = 'empty-msg';
     empty.textContent = tickerFilterSet
       ? '필터 조건에 맞는 토큰이 없습니다.'
       : '토큰 데이터가 없거나 조회에 실패했습니다.';
-    container.replaceChildren(header, empty);
+    container.replaceChildren(...[header, warningEl, empty].filter(Boolean));
     return;
   }
 
@@ -875,7 +893,7 @@ function renderWalletResult(container, tokens, walletUsdt, sourceLabel, address,
     });
 
   table.append(thead, tbody);
-  container.replaceChildren(header, summary, table);
+  container.replaceChildren(...[header, warningEl, summary, table].filter(Boolean));
 }
 
 function createWalletHeader(sourceLabel, address) {
@@ -1259,6 +1277,12 @@ async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
     (token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd)
   );
 
+  let warning = '';
+  if (explorerResult.status === 'rejected') {
+    const explorerMessage = normalizeErrorMessage(explorerResult.reason);
+    warning = `ERC/BEP 토큰 조회 실패 이유: ${explorerMessage}`;
+  }
+
   if (!merged.length) {
     const explorerMessage =
       explorerResult.status === 'rejected' ? normalizeErrorMessage(explorerResult.reason) : 'Explorer empty';
@@ -1282,7 +1306,7 @@ async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
     throw new Error('토큰 조회 실패 [Explorer:EMPTY] 탐색기 토큰 데이터가 비어 있습니다.');
   }
 
-  return merged;
+  return { tokens: merged, warning };
 }
 
 async function fetchExplorerTokenBalances(chainId, address) {
@@ -1298,6 +1322,7 @@ async function fetchExplorerTokenBalances(chainId, address) {
   let lastError = null;
   let isPlanLimited = false;
   let has404EndpointError = false;
+  const diagnostics = [];
   for (const url of candidates) {
     try {
       const payload = await safeFetchJsonGetWithFallback(url);
@@ -1307,37 +1332,55 @@ async function fetchExplorerTokenBalances(chainId, address) {
         break;
       }
     } catch (error) {
+      const rawMessage = error instanceof Error ? error.message : String(error);
       if (isExplorerV1DeprecatedError(error)) {
+        diagnostics.push(`ExplorerAPI: ${rawMessage}`);
         continue;
       }
       if (isEtherscanFreePlanLimitError(error)) {
         isPlanLimited = true;
+        diagnostics.push(`ExplorerAPI: ${rawMessage}`);
         continue;
       }
       if (isExplorerEndpointNotFoundError(error)) {
         has404EndpointError = true;
+        diagnostics.push(`ExplorerAPI: ${rawMessage}`);
         continue;
       }
       lastError = error;
+      diagnostics.push(`ExplorerAPI: ${rawMessage}`);
     }
   }
 
+  let covalentError = null;
   if (!rows.length) {
-    const covalentFallback = await fetchCovalentTokenBalances(chainId, address).catch(() => []);
+    const covalentFallback = await fetchCovalentTokenBalances(chainId, address).catch((error) => {
+      covalentError = normalizeErrorMessage(error);
+      return [];
+    });
     if (covalentFallback.length) return covalentFallback;
   }
 
+  let transferError = null;
   if (!rows.length) {
-    const transferFallback = await fetchEvmTokenBalancesFromTransfers(chainId, address).catch(() => []);
+    const transferFallback = await fetchEvmTokenBalancesFromTransfers(chainId, address).catch((error) => {
+      transferError = normalizeErrorMessage(error);
+      return [];
+    });
     if (transferFallback.length) return transferFallback;
   }
 
+  if (covalentError) diagnostics.push(`Covalent: ${covalentError}`);
+  if (transferError) diagnostics.push(`TransferRebuild: ${transferError}`);
+
+  const details = diagnostics.length ? ` (시도한 방식: ${diagnostics.join(' / ')})` : '';
+
   if (!rows.length && isPlanLimited) {
-    throw new Error('API 응답 오류: Free API access is not supported for this chain.');
+    throw new Error(`API 응답 오류: Free API access is not supported for this chain.${details}`);
   }
 
   if (!rows.length && has404EndpointError) {
-    throw new Error('요청 실패 (404): 해당 체인 탐색기 API 경로를 찾지 못했습니다. 스캔 사이트 API 정책 변경/미지원일 수 있습니다.');
+    throw new Error(`요청 실패 (404): 해당 체인 탐색기 API 경로를 찾지 못했습니다. 스캔 사이트 API 정책 변경/미지원일 수 있습니다.${details}`);
   }
 
   if (!rows.length && lastError) {
