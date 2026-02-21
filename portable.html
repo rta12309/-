@@ -260,15 +260,7 @@ button.primary {
 const MAX_WALLETS_PER_GROUP = 10;
 const MIN_AUTO_REFRESH_SECONDS = 5;
 const ETHERSCAN_V2_ENDPOINT = 'https://api.etherscan.io/v2/api';
-const EXPLORER_V1_ENDPOINTS = {
-  '1': 'https://api.etherscan.io/api',
-  '56': 'https://api.bscscan.com/api',
-  '137': 'https://api.polygonscan.com/api',
-  '42161': 'https://api.arbiscan.io/api',
-  '10': 'https://api-optimistic.etherscan.io/api',
-  '43114': 'https://api.snowtrace.io/api',
-  '8453': 'https://api.basescan.org/api',
-};
+const ETHERSCAN_API_KEY = '';
 
 const enabled = {
   upbit: true,
@@ -296,7 +288,7 @@ const SOURCES = [
     label: 'BNB Smart Chain (RPC + CoinGecko)',
     chain: 'bsc',
     explorerBase: 'https://bscscan.com/address/',
-    apiExample: 'https://bsc-dataseed.binance.org (eth_getBalance)',
+    apiExample: 'https://api.etherscan.io/v2/api?chainid=56&module=account&action=addresstokenbalance&address={address}',
     fetcher: (address) => fetchEvmWallet(address, '56', 'https://bsc-dataseed.binance.org', 'binancecoin', 'BNB'),
   },
   {
@@ -304,7 +296,7 @@ const SOURCES = [
     label: 'Polygon (RPC + CoinGecko)',
     chain: 'polygon',
     explorerBase: 'https://polygonscan.com/address/',
-    apiExample: 'https://polygon-rpc.com (eth_getBalance)',
+    apiExample: 'https://api.etherscan.io/v2/api?chainid=137&module=account&action=addresstokenbalance&address={address}',
     fetcher: (address) => fetchEvmWallet(address, '137', 'https://polygon-rpc.com', 'matic-network', 'MATIC'),
   },
   {
@@ -312,7 +304,7 @@ const SOURCES = [
     label: 'Arbitrum (RPC + CoinGecko)',
     chain: 'arbitrum',
     explorerBase: 'https://arbiscan.io/address/',
-    apiExample: 'https://arb1.arbitrum.io/rpc (eth_getBalance)',
+    apiExample: 'https://api.etherscan.io/v2/api?chainid=42161&module=account&action=addresstokenbalance&address={address}',
     fetcher: (address) => fetchEvmWallet(address, '42161', 'https://arb1.arbitrum.io/rpc', 'ethereum', 'ETH'),
   },
   {
@@ -320,7 +312,7 @@ const SOURCES = [
     label: 'Optimism (RPC + CoinGecko)',
     chain: 'optimism',
     explorerBase: 'https://optimistic.etherscan.io/address/',
-    apiExample: 'https://mainnet.optimism.io (eth_getBalance)',
+    apiExample: 'https://api.etherscan.io/v2/api?chainid=10&module=account&action=addresstokenbalance&address={address}',
     fetcher: (address) => fetchEvmWallet(address, '10', 'https://mainnet.optimism.io', 'ethereum', 'ETH'),
   },
   {
@@ -328,7 +320,7 @@ const SOURCES = [
     label: 'Avalanche (RPC + CoinGecko)',
     chain: 'avalanche',
     explorerBase: 'https://snowtrace.io/address/',
-    apiExample: 'https://api.avax.network/ext/bc/C/rpc (eth_getBalance)',
+    apiExample: 'https://api.etherscan.io/v2/api?chainid=43114&module=account&action=addresstokenbalance&address={address}',
     fetcher: (address) =>
       fetchEvmWallet(address, '43114', 'https://api.avax.network/ext/bc/C/rpc', 'avalanche-2', 'AVAX'),
   },
@@ -337,7 +329,7 @@ const SOURCES = [
     label: 'Base (RPC + CoinGecko)',
     chain: 'base',
     explorerBase: 'https://basescan.org/address/',
-    apiExample: 'https://mainnet.base.org (eth_getBalance)',
+    apiExample: 'https://api.etherscan.io/v2/api?chainid=8453&module=account&action=addresstokenbalance&address={address}',
     fetcher: (address) => fetchEvmWallet(address, '8453', 'https://mainnet.base.org', 'ethereum', 'ETH'),
   },
   {
@@ -863,30 +855,21 @@ async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
 }
 
 async function fetchExplorerTokenBalances(chainId, address) {
-  const candidates = [
-    `${ETHERSCAN_V2_ENDPOINT}?chainid=${chainId}&module=account&action=addresstokenbalance&address=${encodeURIComponent(
-      address
-    )}&page=1&offset=200`,
-    EXPLORER_V1_ENDPOINTS[chainId]
-      ? `${EXPLORER_V1_ENDPOINTS[chainId]}?module=account&action=addresstokenbalance&address=${encodeURIComponent(
-          address
-        )}&page=1&offset=200`
-      : null,
-  ].filter(Boolean);
+  const query = new URLSearchParams({
+    chainid: String(chainId),
+    module: 'account',
+    action: 'addresstokenbalance',
+    address,
+    page: '1',
+    offset: '200',
+  });
 
-  let rows = [];
-  for (const url of candidates) {
-    try {
-      const payload = await safeFetchJson(url);
-      const parsed = parseExplorerRows(payload?.result);
-      if (parsed.length) {
-        rows = parsed;
-        break;
-      }
-    } catch (error) {
-      // try next endpoint
-    }
+  if (ETHERSCAN_API_KEY) {
+    query.set('apikey', ETHERSCAN_API_KEY);
   }
+
+  const payload = await safeFetchJson(`${ETHERSCAN_V2_ENDPOINT}?${query.toString()}`);
+  const rows = parseExplorerRows(payload?.result);
 
   return rows
     .map((row) => {
