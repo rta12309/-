@@ -299,6 +299,16 @@ const SOLANA_RPC_ENDPOINTS = [
   'https://solana-rpc.publicnode.com',
   'https://rpc.ankr.com/solana',
 ];
+const DEXSCREENER_CHAIN_KEYS = {
+  '1': 'ethereum',
+  '10': 'optimism',
+  '56': 'bsc',
+  '137': 'polygon',
+  '8453': 'base',
+  '42161': 'arbitrum',
+  '43114': 'avalanche',
+  solana: 'solana',
+};
 
 const enabled = {
   upbit: true,
@@ -853,13 +863,99 @@ function parseSolanaTokenList(payload) {
   return [];
 }
 
+
+async function fetchDexScreenerTokenMeta(addresses, chainKey) {
+  const byAddress = new Map();
+  const unique = [...new Set(addresses.filter((address) => typeof address === 'string' && address))];
+  if (!unique.length) return byAddress;
+
+  const chunkSize = 25;
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const chunk = unique.slice(i, i + chunkSize);
+    const url = `https://api.dexscreener.com/latest/dex/tokens/${chunk.join(',')}`;
+
+    try {
+      const payload = await safeFetchJsonGetWithFallback(url);
+      const pairs = Array.isArray(payload?.pairs) ? payload.pairs : [];
+      pairs.forEach((pair) => {
+        if (chainKey && pair?.chainId !== chainKey) return;
+
+        const baseAddress = String(pair?.baseToken?.address || '').toLowerCase();
+        if (!baseAddress) return;
+
+        const current = byAddress.get(baseAddress) || { symbol: '', priceUsd: 0, liquidityUsd: 0 };
+        const symbol = String(pair?.baseToken?.symbol || '').trim();
+        const priceUsd = Number(pair?.priceUsd || 0);
+        const liquidityUsd = Number(pair?.liquidity?.usd || 0);
+
+        const shouldReplace =
+          (!current.symbol && symbol) ||
+          (Number.isFinite(priceUsd) && priceUsd > 0 && liquidityUsd > current.liquidityUsd);
+
+        if (shouldReplace) {
+          byAddress.set(baseAddress, {
+            symbol: symbol || current.symbol,
+            priceUsd: Number.isFinite(priceUsd) && priceUsd > 0 ? priceUsd : current.priceUsd,
+            liquidityUsd: Number.isFinite(liquidityUsd) ? liquidityUsd : current.liquidityUsd,
+          });
+        }
+      });
+    } catch (error) {
+      // try next chunk
+    }
+  }
+
+  return byAddress;
+}
+
+function parseTokenDecimals(row) {
+  const decimalCandidates = [row.tokenDecimal, row.decimals, row.decimal, row.TokenDecimal];
+  for (const candidate of decimalCandidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value >= 0 && value <= 36) {
+      return value;
+    }
+  }
+
+  const divisorRaw = row.TokenDivisor ?? row.tokenDivisor;
+  if (divisorRaw !== undefined && divisorRaw !== null) {
+    const divisor = String(divisorRaw).trim();
+    if (/^1(0+)$/.test(divisor)) {
+      return divisor.length - 1;
+    }
+  }
+
+  return 0;
+}
+
+function parseTokenAmount(rawQty, decimals) {
+  const raw = String(rawQty ?? '0').trim();
+  if (!raw || !/^[-]?\d+$/.test(raw)) {
+    return Number(rawQty || 0);
+  }
+
+  const negative = raw.startsWith('-');
+  const digits = negative ? raw.slice(1) : raw;
+  if (decimals <= 0) {
+    return Number(`${negative ? '-' : ''}${digits}`);
+  }
+
+  const padded = digits.padStart(decimals + 1, '0');
+  const whole = padded.slice(0, -decimals);
+  const fraction = padded.slice(-decimals).replace(/0+$/, '');
+  const composed = `${negative ? '-' : ''}${whole}${fraction ? `.${fraction}` : ''}`;
+  return Number(composed);
+}
+
 async function fetchSolanaMintPrices(mints) {
   const prices = {};
   if (!mints.length) return prices;
 
+  const uniqueMints = [...new Set(mints.filter(Boolean))];
+
   const chunkSize = 50;
-  for (let i = 0; i < mints.length; i += chunkSize) {
-    const chunk = mints.slice(i, i + chunkSize);
+  for (let i = 0; i < uniqueMints.length; i += chunkSize) {
+    const chunk = uniqueMints.slice(i, i + chunkSize);
     const ids = encodeURIComponent(chunk.join(','));
 
     try {
@@ -870,7 +966,7 @@ async function fetchSolanaMintPrices(mints) {
         if (price > 0) prices[mint] = price;
       });
     } catch (error) {
-      // try v4 below
+      // try next source
     }
 
     const unresolved = chunk.filter((mint) => !prices[mint]);
@@ -886,8 +982,18 @@ async function fetchSolanaMintPrices(mints) {
         if (price > 0) prices[mint] = price;
       });
     } catch (error) {
-      // keep unresolved as 0
+      // keep unresolved
     }
+  }
+
+  const unresolvedMints = uniqueMints.filter((mint) => !prices[mint]);
+  if (unresolvedMints.length) {
+    const dexMap = await fetchDexScreenerTokenMeta(unresolvedMints, DEXSCREENER_CHAIN_KEYS.solana);
+    unresolvedMints.forEach((mint) => {
+      const row = dexMap.get(String(mint).toLowerCase());
+      const price = Number(row?.priceUsd || 0);
+      if (price > 0) prices[mint] = price;
+    });
   }
 
   return prices;
@@ -1006,43 +1112,25 @@ async function fetchSolanaWallet(address) {
         .filter((mint) => typeof mint === 'string' && mint.length > 0)
     )];
 
-    let solscanMetaByMint = new Map();
-    try {
-      const solscanMeta = await safeFetchJsonGetWithFallback(
-        `https://api-v2.solscan.io/v2/account/token-accounts?address=${encodeURIComponent(
-          address
-        )}&page=1&page_size=200&type=token`
-      );
-      const rows = solscanMeta?.data?.tokenAccounts || [];
-      rows.forEach((token) => {
-        const mint = token.tokenAddress || token.mint;
-        if (!mint) return;
-        solscanMetaByMint.set(mint, {
-          symbol: token.symbol || token.tokenSymbol || token.tokenName || '',
-          priceUsd: Number(token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? 0),
-        });
-      });
-    } catch (error) {
-      solscanMetaByMint = new Map();
-    }
-
-    const tickerMap = await getSolanaTickerMap();
-    const mintPrices = await fetchSolanaMintPrices(mints);
+    const [tickerMap, mintPrices, dexMeta] = await Promise.all([
+      getSolanaTickerMap(),
+      fetchSolanaMintPrices(mints),
+      fetchDexScreenerTokenMeta(mints, DEXSCREENER_CHAIN_KEYS.solana),
+    ]);
 
     const solAmount = Number(solBalancePayload?.result?.value || 0) / 1_000_000_000;
-
     const solPriceUsd = await fetchSolPriceUsd();
 
     const splTokens = tokenAccounts
       .map((item) => {
         const info = item?.account?.data?.parsed?.info || {};
         const amount = Number(info?.tokenAmount?.uiAmount || 0);
-        const mint = info?.mint || 'UNKNOWN';
-        const meta = solscanMetaByMint.get(mint);
-        const priceUsd = Number(mintPrices?.[mint] || meta?.priceUsd || 0);
+        const mint = String(info?.mint || '').trim();
+        const dexRow = dexMeta.get(mint.toLowerCase());
+        const priceUsd = Number(mintPrices?.[mint] || dexRow?.priceUsd || 0);
 
         return {
-          symbol: meta?.symbol || tickerMap.get(mint) || mint.slice(0, 4) + '...' + mint.slice(-4),
+          symbol: dexRow?.symbol || tickerMap.get(mint) || mint.slice(0, 4) + '...' + mint.slice(-4),
           amount,
           priceUsd,
           valueUsd: amount * priceUsd,
@@ -1071,25 +1159,28 @@ async function fetchSolanaWalletFromSolscan(address, rpcError = null) {
     const payload = await safeFetchJsonGetWithFallback(
       `https://api-v2.solscan.io/v2/account/token-accounts?address=${encodeURIComponent(
         address
-      )}&page=1&page_size=40&type=token`
+      )}&page=1&page_size=100&type=token`
     );
 
     const tokenData = payload?.data?.tokenAccounts || [];
-    const tickerMap = await getSolanaTickerMap();
     const mints = [...new Set(tokenData.map((token) => token.tokenAddress || token.mint).filter(Boolean))];
-
-    const mintPrices = await fetchSolanaMintPrices(mints);
+    const [tickerMap, mintPrices, dexMeta] = await Promise.all([
+      getSolanaTickerMap(),
+      fetchSolanaMintPrices(mints),
+      fetchDexScreenerTokenMeta(mints, DEXSCREENER_CHAIN_KEYS.solana),
+    ]);
 
     return tokenData
       .map((token) => {
         const amount = Number(
           token.amount ?? token.balance ?? token.tokenAmount?.uiAmount ?? token.tokenAmount?.amount ?? 0
         );
-        const mint = token.tokenAddress || token.mint || '';
+        const mint = String(token.tokenAddress || token.mint || '').trim();
+        const dexRow = dexMeta.get(mint.toLowerCase());
         const symbol =
-          token.symbol || token.tokenSymbol || tickerMap.get(mint) || token.tokenName || mint.slice(0, 4) + '...' + mint.slice(-4) || 'UNKNOWN';
+          token.symbol || token.tokenSymbol || dexRow?.symbol || tickerMap.get(mint) || token.tokenName || (mint ? `${mint.slice(0, 4)}...${mint.slice(-4)}` : 'UNKNOWN');
         const priceUsd = Number(
-          token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? mintPrices?.[mint] ?? 0
+          token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? mintPrices?.[mint] ?? dexRow?.priceUsd ?? 0
         );
 
         return {
@@ -1182,20 +1273,48 @@ async function fetchExplorerTokenBalances(chainId, address) {
     throw lastError;
   }
 
-  return rows
+  const tokens = rows
     .map((row) => {
-      const decimals = Number(row.TokenDivisor || row.tokenDecimal || row.decimals || 0);
+      const decimals = parseTokenDecimals(row);
       const rawQty = row.TokenQuantity ?? row.balance ?? row.value ?? 0;
-      const amount = decimals > 0 ? Number(rawQty) / 10 ** decimals : Number(rawQty || 0);
+      const amount = parseTokenAmount(rawQty, decimals);
       const priceUsd = Number(row.TokenPriceUSD || row.tokenPriceUSD || row.usdPrice || 0);
+      const contractAddress = String(row.TokenAddress || row.contractAddress || row.tokenAddress || '').toLowerCase();
 
       return {
         symbol: row.TokenSymbol || row.tokenSymbol || row.TokenName || row.tokenName || row.symbol || 'UNKNOWN',
         amount,
         priceUsd,
         valueUsd: amount * priceUsd,
+        contractAddress,
       };
     })
+    .filter((token) => Number.isFinite(token.amount) && token.amount > 0);
+
+  const unresolvedAddresses = tokens
+    .filter((token) => !(Number(token.priceUsd) > 0) && token.contractAddress)
+    .map((token) => token.contractAddress);
+
+  if (unresolvedAddresses.length) {
+    const dexMap = await fetchDexScreenerTokenMeta(unresolvedAddresses, DEXSCREENER_CHAIN_KEYS[String(chainId)]);
+    tokens.forEach((token) => {
+      if (Number(token.priceUsd) > 0 || !token.contractAddress) return;
+      const dexRow = dexMap.get(token.contractAddress);
+      if (dexRow) {
+        if (!token.symbol || token.symbol === 'UNKNOWN') token.symbol = dexRow.symbol || token.symbol;
+        token.priceUsd = Number(dexRow.priceUsd || 0);
+      }
+      token.valueUsd = token.amount * token.priceUsd;
+    });
+  }
+
+  return tokens
+    .map((token) => ({
+      symbol: token.symbol,
+      amount: token.amount,
+      priceUsd: Number(token.priceUsd || 0),
+      valueUsd: token.amount * Number(token.priceUsd || 0),
+    }))
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
 }
 
