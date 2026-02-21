@@ -192,8 +192,36 @@
     function normalizeAmountByMode(quantity, mode, decimals) {
       const text = String(quantity ?? '0');
       if (mode === 'decimal') return Number(text);
-      const raw = Number(text);
-      return raw / Math.pow(10, decimals);
+      return rawToDecimalAmount(text, decimals);
+    }
+
+
+    function rawToDecimalAmount(rawText, decimals) {
+      const text = String(rawText || '').trim();
+      if (!/^\d+$/.test(text)) return NaN;
+      try {
+        const bi = BigInt(text);
+        const scale = 10n ** BigInt(decimals);
+        const intPart = bi / scale;
+        const fracPart = bi % scale;
+        const fracText = fracPart.toString().padStart(decimals, '0').slice(0, 12);
+        const composed = decimals > 0 ? `${intPart.toString()}.${fracText}` : intPart.toString();
+        return Number(composed);
+      } catch {
+        return NaN;
+      }
+    }
+
+    async function findHolderQuantityForAddress(chain, apiKey, tokenAddress, wallet, maxPages) {
+      const target = wallet.toLowerCase();
+      for (let page = 1; page <= maxPages; page++) {
+        const result = await scanCall(chain, apiKey, { module: 'token', action: 'tokenholderlist', contractaddress: tokenAddress, page, offset: 100 });
+        if (!Array.isArray(result) || result.length === 0) break;
+        const found = result.find((h) => String(h.TokenHolderAddress || h.address || '').toLowerCase() === target);
+        if (found) return String(found.TokenHolderQuantity ?? found.balance ?? '');
+        if (result.length < 100) break;
+      }
+      return null;
     }
 
     function parseLogAddress(topic) {
@@ -294,11 +322,29 @@
         const decimals = await getTokenDecimals(chain, apiKey, tokenAddress);
 
         const rawBal = await scanCall(chain, apiKey, { module: 'account', action: 'tokenbalance', contractaddress: tokenAddress, address: target, tag: 'latest' });
-        const tokenAmount = Number(rawBal) / Math.pow(10, decimals);
-        const usdValue = tokenAmount * price;
+        let tokenAmount = rawToDecimalAmount(rawBal, decimals);
+
+        if (!Number.isFinite(tokenAmount)) {
+          log('[WARN] tokenbalance 값이 숫자로 해석되지 않아 holder 목록에서 대상 지갑 수량 재시도합니다.');
+          const holderQty = await findHolderQuantityForAddress(chain, apiKey, tokenAddress, target, 20);
+          if (holderQty !== null) {
+            if (holderQty.includes('.')) {
+              tokenAmount = Number(holderQty);
+            } else {
+              tokenAmount = rawToDecimalAmount(holderQty, decimals);
+            }
+          }
+        }
+
+        const usdValue = Number.isFinite(tokenAmount) ? tokenAmount * price : NaN;
 
         let usdPass = true;
-        if (settings.useUsdFilter) usdPass = usdValue >= minUsd && usdValue <= maxUsd;
+        if (settings.useUsdFilter) {
+          usdPass = Number.isFinite(usdValue) && usdValue >= minUsd && usdValue <= maxUsd;
+          if (!Number.isFinite(usdValue)) {
+            log('[WARN] USD 계산 실패(NaN): API 응답 형식 또는 플랜 제한으로 balance를 읽지 못했습니다. API 키 입력 후 재시도 권장.');
+          }
+        }
 
         const txs = await scanCall(chain, apiKey, { module: 'account', action: 'tokentx', contractaddress: tokenAddress, address: target, page: 1, offset: 1000, startblock: 0, endblock: 99999999, sort: 'asc' });
         const behaviorOff = !settings.useSinceFirstTx && !settings.useInboundRatio && !settings.useUniqueSenders;
