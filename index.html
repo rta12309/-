@@ -16,11 +16,12 @@
     th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
     th { background: #f6f6f6; }
     .muted { color: #666; font-size: 13px; }
+    .help { color: #666; font-size: 12px; margin-top: 4px; }
   </style>
 </head>
 <body>
   <h2>ChainScan 조건 지갑 필터 (웹 실행)</h2>
-  <p class="muted">설치 없이 브라우저에서 바로 실행됩니다. API 키만 입력하세요.</p>
+  <p class="muted">설치 없이 브라우저에서 바로 실행됩니다. API Key 없이도 실행 가능(속도/제한 가능)합니다.</p>
 
   <div class="grid">
     <div class="row"><label>체인</label><select id="chain">
@@ -30,12 +31,34 @@
       <option value="arbitrum">arbitrum</option>
       <option value="optimism">optimism</option>
     </select></div>
+
     <div class="row"><label>토큰 티커 (예: USDT)</label><input id="ticker" value="USDT" /></div>
-    <div class="row"><label>기준 날짜/시간 UTC (YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM:SS)</label><input id="since" value="2025-01-01" /></div>
-    <div class="row"><label>Scan API Key</label><input id="apiKey" placeholder="Etherscan/BscScan/PolygonScan... API key" /></div>
-    <div class="row"><label>토큰 주소(선택, 비우면 티커로 자동 탐색)</label><input id="tokenAddress" placeholder="0x..." /></div>
-    <div class="row"><label>Decimals</label><input id="decimals" type="number" value="18" /></div>
-    <div class="row"><label>홀더 수량이 raw 값이면 체크</label><select id="isRaw"><option value="false">false</option><option value="true">true</option></select></div>
+    <div class="row"><label>토큰 CA 주소(선택, 티커 옆)</label><input id="tokenAddress" placeholder="0x... (비우면 티커로 자동 탐색)" /></div>
+
+    <div class="row">
+      <label>기준 날짜/시간 UTC (분 단위 기본값 포함)</label>
+      <input id="since" type="datetime-local" value="2025-01-01T00:00" />
+      <div class="help">예: 2025-01-01 00:00 (초 입력 없이 분 단위까지)</div>
+    </div>
+
+    <div class="row">
+      <label>Scan API Key (선택)</label>
+      <input id="apiKey" placeholder="비워도 실행 가능. 입력하면 더 안정적일 수 있음" />
+      <div class="help">공식 Explorer API 키가 있으면 속도/호출 한도 측면에서 유리합니다.</div>
+    </div>
+
+    <div class="row">
+      <label>홀드 수량 Decimals</label>
+      <input id="decimals" type="number" value="18" />
+      <div class="help">토큰 수량 소수점 자리수입니다. 예: USDT는 보통 6, ETH 계열 토큰은 보통 18.</div>
+    </div>
+
+    <div class="row">
+      <label>홀더 수량이 raw 값이면 체크</label>
+      <select id="isRaw"><option value="false">false</option><option value="true">true</option></select>
+      <div class="help">raw 값은 사람이 읽기 전 정수값입니다. 예: 1 USDT(6 decimals) = 1000000.</div>
+    </div>
+
     <div class="row"><label>최소 USD</label><input id="minUsd" type="number" value="300000" /></div>
     <div class="row"><label>최대 USD</label><input id="maxUsd" type="number" value="30000000" /></div>
     <div class="row"><label>입금 비율 임계치</label><input id="inboundRatio" type="number" step="0.01" value="0.8" /></div>
@@ -77,13 +100,16 @@
 
     function parseSince(value) {
       if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return Math.floor(new Date(`${value}T00:00:00Z`).getTime() / 1000);
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return Math.floor(new Date(`${value}:00Z`).getTime() / 1000);
       if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(value)) return Math.floor(new Date(`${value}Z`).getTime() / 1000);
-      throw new Error("since 형식 오류: YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM:SS");
+      throw new Error("since 형식 오류: YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM(:SS)");
     }
 
     async function scanCall(chain, apiKey, params) {
       const url = new URL(SCAN_CONFIG[chain].apiBase);
-      Object.entries({ ...params, apikey: apiKey }).forEach(([k, v]) => url.searchParams.set(k, v));
+      const payload = { ...params };
+      if (apiKey) payload.apikey = apiKey;
+      Object.entries(payload).forEach(([k, v]) => url.searchParams.set(k, v));
       const res = await fetch(url);
       if (!res.ok) throw new Error(`scan api http error ${res.status}`);
       const data = await res.json();
@@ -191,8 +217,8 @@
         const minSenders = Number(document.getElementById("minSenders").value);
         const maxPages = Number(document.getElementById("maxPages").value);
 
-        if (!apiKey) throw new Error("Scan API Key를 입력하세요.");
         const sinceTs = parseSince(since);
+        if (!apiKey) log("[INFO] API Key 없이 실행합니다. 체인 API 제한이 더 빨리 걸릴 수 있습니다.");
 
         const tokenAddress = inputTokenAddress || await resolveTokenAddress(chain, ticker);
         log(`[INFO] tokenAddress=${tokenAddress}`);
