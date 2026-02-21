@@ -2,6 +2,11 @@ const MAX_WALLETS_PER_GROUP = 10;
 const MIN_AUTO_REFRESH_SECONDS = 5;
 const ETHERSCAN_V2_ENDPOINT = 'https://api.etherscan.io/v2/api';
 const ETHERSCAN_API_KEY = '';
+const SOLANA_RPC_ENDPOINTS = [
+  'https://api.mainnet-beta.solana.com',
+  'https://solana-rpc.publicnode.com',
+  'https://rpc.ankr.com/solana',
+];
 
 const enabled = {
   upbit: true,
@@ -21,7 +26,7 @@ const SOURCES = [
     label: 'Solana (RPC + Jupiter Price)',
     chain: 'solana',
     explorerBase: 'https://solscan.io/account/',
-    apiExample: 'https://api.mainnet-beta.solana.com (getBalance/getTokenAccountsByOwner)',
+    apiExample: 'Solana RPC fallback (mainnet-beta/publicnode/ankr)',
     fetcher: fetchSolanaWallet,
   },
   {
@@ -365,6 +370,9 @@ async function analyzeGroup(groupNode) {
 
 function normalizeErrorMessage(error) {
   const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('요청 실패 (403)')) {
+    return '외부 API에서 접근을 차단(403)했습니다. 다른 RPC/잠시 후 재시도를 시도해 주세요.';
+  }
   if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
     return '외부 API 네트워크/CORS 제한으로 조회에 실패했습니다. 잠시 후 다시 시도하거나 다른 체인으로 확인해 주세요.';
   }
@@ -492,23 +500,38 @@ async function fetchEthereumWalletFromEthplorer(address) {
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
 }
 
+async function fetchSolanaRpcWithFallback(body) {
+  let lastError = null;
+
+  for (const rpcUrl of SOLANA_RPC_ENDPOINTS) {
+    try {
+      const payload = await safeFetchJson(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (payload?.error?.message) {
+        throw new Error(`RPC 응답 오류: ${payload.error.message}`);
+      }
+
+      return payload;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('Solana RPC 조회 실패');
+}
+
 async function fetchSolanaWallet(address) {
-  const solanaRpcUrl = 'https://api.mainnet-beta.solana.com';
   const [solBalancePayload, tokenAccountsPayload] = await Promise.all([
-    safeFetchJson(solanaRpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBalance', params: [address] }),
-    }),
-    safeFetchJson(solanaRpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 2,
-        method: 'getTokenAccountsByOwner',
-        params: [address, { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }, { encoding: 'jsonParsed' }],
-      }),
+    fetchSolanaRpcWithFallback({ jsonrpc: '2.0', id: 1, method: 'getBalance', params: [address] }),
+    fetchSolanaRpcWithFallback({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'getTokenAccountsByOwner',
+      params: [address, { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }, { encoding: 'jsonParsed' }],
     }),
   ]);
 
