@@ -261,6 +261,15 @@ const MAX_WALLETS_PER_GROUP = 10;
 const MIN_AUTO_REFRESH_SECONDS = 5;
 const ETHERSCAN_V2_ENDPOINT = 'https://api.etherscan.io/v2/api';
 const ETHERSCAN_API_KEY = '';
+const EXPLORER_V1_ENDPOINTS = {
+  '1': 'https://api.etherscan.io/api',
+  '56': 'https://api.bscscan.com/api',
+  '137': 'https://api.polygonscan.com/api',
+  '42161': 'https://api.arbiscan.io/api',
+  '10': 'https://api-optimistic.etherscan.io/api',
+  '43114': 'https://api.snowtrace.io/api',
+  '8453': 'https://api.basescan.org/api',
+};
 const SOLANA_RPC_ENDPOINTS = [
   'https://api.mainnet-beta.solana.com',
   'https://solana-rpc.publicnode.com',
@@ -285,7 +294,7 @@ const SOURCES = [
     label: 'Solana (RPC + Jupiter Price)',
     chain: 'solana',
     explorerBase: 'https://solscan.io/account/',
-    apiExample: 'Solana RPC fallback (mainnet-beta/publicnode/ankr)',
+    apiExample: 'Solana RPC fallback + Solscan API fallback',
     fetcher: fetchSolanaWallet,
   },
   {
@@ -784,69 +793,105 @@ async function fetchSolanaRpcWithFallback(body) {
 }
 
 async function fetchSolanaWallet(address) {
-  const [solBalancePayload, tokenAccountsPayload] = await Promise.all([
-    fetchSolanaRpcWithFallback({ jsonrpc: '2.0', id: 1, method: 'getBalance', params: [address] }),
-    fetchSolanaRpcWithFallback({
-      jsonrpc: '2.0',
-      id: 2,
-      method: 'getTokenAccountsByOwner',
-      params: [address, { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }, { encoding: 'jsonParsed' }],
-    }),
-  ]);
+  try {
+    const [solBalancePayload, tokenAccountsPayload] = await Promise.all([
+      fetchSolanaRpcWithFallback({ jsonrpc: '2.0', id: 1, method: 'getBalance', params: [address] }),
+      fetchSolanaRpcWithFallback({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'getTokenAccountsByOwner',
+        params: [address, { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }, { encoding: 'jsonParsed' }],
+      }),
+    ]);
 
-  const tokenAccounts = tokenAccountsPayload?.result?.value || [];
-  const mints = [...new Set(
-    tokenAccounts
-      .map((item) => item?.account?.data?.parsed?.info?.mint)
-      .filter((mint) => typeof mint === 'string' && mint.length > 0)
-  )];
+    const tokenAccounts = tokenAccountsPayload?.result?.value || [];
+    const mints = [...new Set(
+      tokenAccounts
+        .map((item) => item?.account?.data?.parsed?.info?.mint)
+        .filter((mint) => typeof mint === 'string' && mint.length > 0)
+    )];
 
-  let mintPrices = {};
-  if (mints.length) {
-    try {
-      const pricePayload = await safeFetchJson(
-        `https://price.jup.ag/v4/price?ids=${encodeURIComponent(mints.join(','))}`
-      );
-      mintPrices = pricePayload?.data || {};
-    } catch (error) {
-      mintPrices = {};
+    let mintPrices = {};
+    if (mints.length) {
+      try {
+        const pricePayload = await safeFetchJson(
+          `https://price.jup.ag/v4/price?ids=${encodeURIComponent(mints.join(','))}`
+        );
+        mintPrices = pricePayload?.data || {};
+      } catch (error) {
+        mintPrices = {};
+      }
     }
+
+    const solAmount = Number(solBalancePayload?.result?.value || 0) / 1_000_000_000;
+
+    const [solPricePayload] = await Promise.all([
+      safeFetchJson('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'),
+    ]);
+    const solPriceUsd = Number(solPricePayload?.solana?.usd || 0);
+
+    const splTokens = tokenAccounts
+      .map((item) => {
+        const info = item?.account?.data?.parsed?.info || {};
+        const amount = Number(info?.tokenAmount?.uiAmount || 0);
+        const mint = info?.mint || 'UNKNOWN';
+        const priceUsd = Number(mintPrices?.[mint]?.price || 0);
+
+        return {
+          symbol: mint.slice(0, 4) + '...' + mint.slice(-4),
+          amount,
+          priceUsd,
+          valueUsd: amount * priceUsd,
+        };
+      })
+      .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+
+    const tokens = [
+      {
+        symbol: 'SOL',
+        amount: solAmount,
+        priceUsd: solPriceUsd,
+        valueUsd: solAmount * solPriceUsd,
+      },
+      ...splTokens,
+    ].filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+
+    return tokens;
+  } catch (rpcError) {
+    return fetchSolanaWalletFromSolscan(address, rpcError);
   }
+}
 
-  const solAmount = Number(solBalancePayload?.result?.value || 0) / 1_000_000_000;
+async function fetchSolanaWalletFromSolscan(address, rpcError = null) {
+  try {
+    const payload = await safeFetchJson(
+      `https://api-v2.solscan.io/v2/account/token-accounts?address=${encodeURIComponent(
+        address
+      )}&page=1&page_size=40&type=token`
+    );
 
-  const [solPricePayload] = await Promise.all([
-    safeFetchJson('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'),
-  ]);
-  const solPriceUsd = Number(solPricePayload?.solana?.usd || 0);
+    const tokenData = payload?.data?.tokenAccounts || [];
+    return tokenData
+      .map((token) => {
+        const amount = Number(
+          token.amount ?? token.balance ?? token.tokenAmount?.uiAmount ?? token.tokenAmount?.amount ?? 0
+        );
+        const symbol = token.symbol || token.tokenSymbol || token.tokenName || token.tokenAddress || 'UNKNOWN';
+        const priceUsd = Number(token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? 0);
 
-  const splTokens = tokenAccounts
-    .map((item) => {
-      const info = item?.account?.data?.parsed?.info || {};
-      const amount = Number(info?.tokenAmount?.uiAmount || 0);
-      const mint = info?.mint || 'UNKNOWN';
-      const priceUsd = Number(mintPrices?.[mint]?.price || 0);
-
-      return {
-        symbol: mint.slice(0, 4) + '...' + mint.slice(-4),
-        amount,
-        priceUsd,
-        valueUsd: amount * priceUsd,
-      };
-    })
-    .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
-
-  const tokens = [
-    {
-      symbol: 'SOL',
-      amount: solAmount,
-      priceUsd: solPriceUsd,
-      valueUsd: solAmount * solPriceUsd,
-    },
-    ...splTokens,
-  ].filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
-
-  return tokens;
+        return {
+          symbol,
+          amount,
+          priceUsd,
+          valueUsd: amount * priceUsd,
+        };
+      })
+      .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+  } catch (solscanError) {
+    const rpcMessage = rpcError ? normalizeErrorMessage(rpcError) : '';
+    const solscanMessage = normalizeErrorMessage(solscanError);
+    throw new Error(`Solana 조회 실패 (RPC: ${rpcMessage} / Solscan: ${solscanMessage})`);
+  }
 }
 
 async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
@@ -878,7 +923,7 @@ async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
 }
 
 async function fetchExplorerTokenBalances(chainId, address) {
-  const query = new URLSearchParams({
+  const v2Query = new URLSearchParams({
     chainid: String(chainId),
     module: 'account',
     action: 'addresstokenbalance',
@@ -888,11 +933,41 @@ async function fetchExplorerTokenBalances(chainId, address) {
   });
 
   if (ETHERSCAN_API_KEY) {
-    query.set('apikey', ETHERSCAN_API_KEY);
+    v2Query.set('apikey', ETHERSCAN_API_KEY);
   }
 
-  const payload = await safeFetchJson(`${ETHERSCAN_V2_ENDPOINT}?${query.toString()}`);
-  const rows = parseExplorerRows(payload?.result);
+  const candidates = [`${ETHERSCAN_V2_ENDPOINT}?${v2Query.toString()}`];
+  if (EXPLORER_V1_ENDPOINTS[chainId]) {
+    candidates.push(
+      `${EXPLORER_V1_ENDPOINTS[chainId]}?module=account&action=addresstokenbalance&address=${encodeURIComponent(
+        address
+      )}&page=1&offset=200`
+    );
+  }
+
+  let rows = [];
+  let lastError = null;
+  for (const url of candidates) {
+    try {
+      const payload = await safeFetchJson(url);
+      const parsed = parseExplorerRows(payload?.result);
+      if (parsed.length) {
+        rows = parsed;
+        break;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (!rows.length && chainId === '56') {
+    const bscFallback = await fetchBscTokenBalancesFromTransfers(address).catch(() => []);
+    if (bscFallback.length) return bscFallback;
+  }
+
+  if (!rows.length && lastError) {
+    throw lastError;
+  }
 
   return rows
     .map((row) => {
@@ -909,6 +984,46 @@ async function fetchExplorerTokenBalances(chainId, address) {
       };
     })
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+}
+
+async function fetchBscTokenBalancesFromTransfers(address) {
+  const endpoint =
+    `${EXPLORER_V1_ENDPOINTS['56']}?module=account&action=tokentx&address=${encodeURIComponent(
+      address
+    )}&startblock=0&endblock=99999999&page=1&offset=1000&sort=asc`;
+  const payload = await safeFetchJson(endpoint);
+  const rows = parseExplorerRows(payload?.result);
+
+  const lowerAddress = address.toLowerCase();
+  const byContract = new Map();
+  rows.forEach((tx) => {
+    const contract = String(tx.contractAddress || '').toLowerCase();
+    if (!contract) return;
+
+    const decimals = Number(tx.tokenDecimal || 0);
+    const raw = Number(tx.value || 0);
+    const amount = decimals > 0 ? raw / 10 ** decimals : raw;
+    if (!Number.isFinite(amount) || amount <= 0) return;
+
+    const from = String(tx.from || '').toLowerCase();
+    const to = String(tx.to || '').toLowerCase();
+
+    const prev = byContract.get(contract) || {
+      symbol: tx.tokenSymbol || tx.tokenName || 'UNKNOWN',
+      amount: 0,
+      priceUsd: 0,
+      valueUsd: 0,
+    };
+
+    if (to === lowerAddress) prev.amount += amount;
+    if (from === lowerAddress) prev.amount -= amount;
+
+    byContract.set(contract, prev);
+  });
+
+  return [...byContract.values()]
+    .filter((token) => Number.isFinite(token.amount) && token.amount > 0)
+    .map((token) => ({ ...token, valueUsd: token.amount * token.priceUsd }));
 }
 
 function parseExplorerRows(result) {
