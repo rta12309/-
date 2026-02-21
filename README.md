@@ -1,6 +1,14 @@
 # ChainScan 조건 지갑 필터
 
-특정 체인/날짜/토큰 티커를 입력받아, 체인 스캔 API 데이터를 기반으로 아래 조건에 맞는 지갑 리스트를 CSV로 저장합니다.
+요청하신 조건으로 지갑을 찾을 수 있게 **웹 버전(설치 없이 실행)** + Python CLI 버전을 제공합니다.
+
+## 웹 버전 (설치/압축해제 없이 바로 실행)
+1. `index.html` 파일을 브라우저에서 바로 열기.
+2. 체인, 티커, 날짜, API Key 입력.
+3. `스캔 실행` 클릭.
+4. 결과를 표로 확인하고 `CSV 다운로드` 클릭.
+
+> 브라우저에서 직접 Scan API/CoinGecko API를 호출합니다.
 
 ## 필터 조건
 1. 특정 체인의 특정 토큰 홀더 중 보유 달러 가치가 `300k ~ 30m`.
@@ -15,7 +23,7 @@
 - arbitrum (Arbiscan)
 - optimism (Optimistic Etherscan)
 
-## 실행 방법
+## Python CLI 실행 방법 (선택)
 ```bash
 python3 wallet_scanner.py \
   --chain ethereum \
@@ -27,7 +35,7 @@ python3 wallet_scanner.py \
   --output wallet_signals.csv
 ```
 
-## 주요 옵션
+## 주요 옵션 (CLI)
 - `--chain`: 체인 선택.
 - `--ticker`: 토큰 티커 입력.
 - `--since`: 기준 날짜/시간(UTC, `YYYY-MM-DD` 또는 `YYYY-MM-DDTHH:MM:SS`).
@@ -39,5 +47,5 @@ python3 wallet_scanner.py \
 - `--min-unique-senders`: 최소 송신자 수.
 
 ## 참고
-- 일부 Scan API의 `tokenholderlist`/`tokeninfo` 계열은 요금제 제한이 있을 수 있습니다.
+- 일부 Scan API의 `tokenholderlist` 계열은 요금제 제한이 있을 수 있습니다.
 - 티커 심볼이 중복되는 경우 CoinGecko 시가총액 기준으로 가장 큰 후보를 자동 선택합니다.

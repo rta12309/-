@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChainScan 조건 지갑 필터 (Web)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px; line-height: 1.5; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 12px; }
+    label { display: block; font-size: 13px; color: #444; margin-bottom: 4px; }
+    input, select { width: 100%; box-sizing: border-box; padding: 8px; }
+    button { padding: 10px 14px; margin-top: 14px; cursor: pointer; }
+    .row { margin-bottom: 10px; }
+    #log { white-space: pre-wrap; background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; min-height: 120px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+    th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
+    th { background: #f6f6f6; }
+    .muted { color: #666; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h2>ChainScan 조건 지갑 필터 (웹 실행)</h2>
+  <p class="muted">설치 없이 브라우저에서 바로 실행됩니다. API 키만 입력하세요.</p>
+
+  <div class="grid">
+    <div class="row"><label>체인</label><select id="chain">
+      <option value="ethereum">ethereum</option>
+      <option value="bsc">bsc</option>
+      <option value="polygon">polygon</option>
+      <option value="arbitrum">arbitrum</option>
+      <option value="optimism">optimism</option>
+    </select></div>
+    <div class="row"><label>토큰 티커 (예: USDT)</label><input id="ticker" value="USDT" /></div>
+    <div class="row"><label>기준 날짜/시간 UTC (YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM:SS)</label><input id="since" value="2025-01-01" /></div>
+    <div class="row"><label>Scan API Key</label><input id="apiKey" placeholder="Etherscan/BscScan/PolygonScan... API key" /></div>
+    <div class="row"><label>토큰 주소(선택, 비우면 티커로 자동 탐색)</label><input id="tokenAddress" placeholder="0x..." /></div>
+    <div class="row"><label>Decimals</label><input id="decimals" type="number" value="18" /></div>
+    <div class="row"><label>홀더 수량이 raw 값이면 체크</label><select id="isRaw"><option value="false">false</option><option value="true">true</option></select></div>
+    <div class="row"><label>최소 USD</label><input id="minUsd" type="number" value="300000" /></div>
+    <div class="row"><label>최대 USD</label><input id="maxUsd" type="number" value="30000000" /></div>
+    <div class="row"><label>입금 비율 임계치</label><input id="inboundRatio" type="number" step="0.01" value="0.8" /></div>
+    <div class="row"><label>최소 송신자 수</label><input id="minSenders" type="number" value="3" /></div>
+    <div class="row"><label>홀더 조회 페이지 수</label><input id="maxPages" type="number" value="10" /></div>
+  </div>
+
+  <button id="runBtn">스캔 실행</button>
+  <button id="downloadBtn" disabled>CSV 다운로드</button>
+
+  <h3>로그</h3>
+  <div id="log"></div>
+
+  <h3>결과</h3>
+  <table id="resultTable">
+    <thead><tr><th>address</th><th>token_amount</th><th>usd_value</th><th>tx_count_after_since</th><th>inbound_ratio</th><th>unique_senders</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    const SCAN_CONFIG = {
+      ethereum: { apiBase: "https://api.etherscan.io/api", cgPlatform: "ethereum" },
+      bsc: { apiBase: "https://api.bscscan.com/api", cgPlatform: "binance-smart-chain" },
+      polygon: { apiBase: "https://api.polygonscan.com/api", cgPlatform: "polygon-pos" },
+      arbitrum: { apiBase: "https://api.arbiscan.io/api", cgPlatform: "arbitrum-one" },
+      optimism: { apiBase: "https://api-optimistic.etherscan.io/api", cgPlatform: "optimistic-ethereum" },
+    };
+
+    let latestSignals = [];
+    const logEl = document.getElementById("log");
+    const tbody = document.querySelector("#resultTable tbody");
+    const runBtn = document.getElementById("runBtn");
+    const downloadBtn = document.getElementById("downloadBtn");
+
+    function log(msg) {
+      logEl.textContent += `${msg}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function parseSince(value) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return Math.floor(new Date(`${value}T00:00:00Z`).getTime() / 1000);
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(value)) return Math.floor(new Date(`${value}Z`).getTime() / 1000);
+      throw new Error("since 형식 오류: YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM:SS");
+    }
+
+    async function scanCall(chain, apiKey, params) {
+      const url = new URL(SCAN_CONFIG[chain].apiBase);
+      Object.entries({ ...params, apikey: apiKey }).forEach(([k, v]) => url.searchParams.set(k, v));
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`scan api http error ${res.status}`);
+      const data = await res.json();
+      if (String(data.status) === "0" && (data.result === "" || data.result == null)) {
+        throw new Error(`scan api error: ${data.message} / ${data.result}`);
+      }
+      return data.result;
+    }
+
+    async function resolveTokenAddress(chain, ticker) {
+      const platform = SCAN_CONFIG[chain].cgPlatform;
+      const listRes = await fetch("https://api.coingecko.com/api/v3/coins/list?include_platform=true");
+      const coins = await listRes.json();
+      const matches = coins.filter(c => (c.symbol || "").toLowerCase() === ticker.toLowerCase() && c.platforms && c.platforms[platform]);
+      if (!matches.length) throw new Error(`CoinGecko에서 ${chain}:${ticker}를 찾지 못했습니다.`);
+
+      let best = null;
+      for (const coin of matches.slice(0, 20)) {
+        const detailRes = await fetch(`https://api.coingecko.com/api/v3/coins/${coin.id}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false`);
+        const detail = await detailRes.json();
+        const marketCap = Number(detail?.market_data?.market_cap?.usd || 0);
+        const contract = detail?.platforms?.[platform];
+        if (!contract) continue;
+        if (!best || marketCap > best.marketCap) best = { contract, marketCap };
+      }
+      if (!best) throw new Error("토큰 주소 자동 탐색 실패");
+      return best.contract;
+    }
+
+    async function getTokenPrice(chain, contract) {
+      const platform = SCAN_CONFIG[chain].cgPlatform;
+      const u = new URL(`https://api.coingecko.com/api/v3/simple/token_price/${platform}`);
+      u.searchParams.set("contract_addresses", contract);
+      u.searchParams.set("vs_currencies", "usd");
+      const res = await fetch(u);
+      const data = await res.json();
+      const key = contract.toLowerCase();
+      const price = data?.[key]?.usd ?? data?.[contract]?.usd;
+      if (price == null) throw new Error("토큰 가격 조회 실패");
+      return Number(price);
+    }
+
+    function normalizeAmount(quantity, decimals, isRaw) {
+      const n = Number(quantity);
+      return isRaw ? n / Math.pow(10, decimals) : n;
+    }
+
+    function passBehavior(txs, address, sinceTs, inboundRatioThreshold, minSenders) {
+      if (!Array.isArray(txs) || !txs.length) return null;
+      const times = txs.map(t => Number(t.timeStamp || 0)).filter(Boolean);
+      if (!times.length) return null;
+      if (Math.min(...times) < sinceTs) return null;
+
+      const after = txs.filter(t => Number(t.timeStamp || 0) >= sinceTs);
+      if (!after.length) return null;
+
+      const addr = address.toLowerCase();
+      const inbound = after.filter(t => String(t.to || "").toLowerCase() === addr);
+      const inboundRatio = inbound.length / after.length;
+      const uniqueSenders = new Set(inbound.map(t => String(t.from || "").toLowerCase()).filter(Boolean)).size;
+      if (inboundRatio < inboundRatioThreshold || uniqueSenders < minSenders) return null;
+
+      return { txCountAfterSince: after.length, inboundRatio, uniqueSenders };
+    }
+
+    function render(signals) {
+      tbody.innerHTML = "";
+      for (const s of signals) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${s.address}</td><td>${s.token_amount.toFixed(8)}</td><td>${s.usd_value.toFixed(2)}</td><td>${s.tx_count_after_since}</td><td>${s.inbound_ratio.toFixed(4)}</td><td>${s.unique_senders}</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function downloadCsv(signals) {
+      const header = ["address","token_amount","usd_value","tx_count_after_since","inbound_ratio","unique_senders"];
+      const rows = signals.map(s => [s.address, s.token_amount, s.usd_value, s.tx_count_after_since, s.inbound_ratio, s.unique_senders]);
+      const csv = [header, ...rows].map(r => r.join(",")).join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "wallet_signals.csv";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    runBtn.onclick = async () => {
+      latestSignals = [];
+      downloadBtn.disabled = true;
+      tbody.innerHTML = "";
+      logEl.textContent = "";
+
+      try {
+        runBtn.disabled = true;
+        const chain = document.getElementById("chain").value;
+        const ticker = document.getElementById("ticker").value.trim();
+        const apiKey = document.getElementById("apiKey").value.trim();
+        const since = document.getElementById("since").value.trim();
+        const inputTokenAddress = document.getElementById("tokenAddress").value.trim();
+        const decimals = Number(document.getElementById("decimals").value || 18);
+        const isRaw = document.getElementById("isRaw").value === "true";
+        const minUsd = Number(document.getElementById("minUsd").value);
+        const maxUsd = Number(document.getElementById("maxUsd").value);
+        const inboundRatioThreshold = Number(document.getElementById("inboundRatio").value);
+        const minSenders = Number(document.getElementById("minSenders").value);
+        const maxPages = Number(document.getElementById("maxPages").value);
+
+        if (!apiKey) throw new Error("Scan API Key를 입력하세요.");
+        const sinceTs = parseSince(since);
+
+        const tokenAddress = inputTokenAddress || await resolveTokenAddress(chain, ticker);
+        log(`[INFO] tokenAddress=${tokenAddress}`);
+
+        const price = await getTokenPrice(chain, tokenAddress);
+        log(`[INFO] tokenPriceUsd=${price}`);
+
+        const holders = [];
+        for (let page = 1; page <= maxPages; page++) {
+          const result = await scanCall(chain, apiKey, {
+            module: "token",
+            action: "tokenholderlist",
+            contractaddress: tokenAddress,
+            page,
+            offset: 100,
+          });
+          if (!Array.isArray(result) || result.length === 0) break;
+          holders.push(...result);
+          log(`[INFO] holders page ${page}, total=${holders.length}`);
+          if (result.length < 100) break;
+        }
+
+        const candidates = holders
+          .map(h => {
+            const address = h.TokenHolderAddress || h.address;
+            const amount = normalizeAmount(h.TokenHolderQuantity ?? h.balance, decimals, isRaw);
+            const usdValue = amount * price;
+            return { address, token_amount: amount, usd_value: usdValue };
+          })
+          .filter(h => h.address && Number.isFinite(h.usd_value) && h.usd_value >= minUsd && h.usd_value <= maxUsd);
+
+        log(`[INFO] usd-filtered holders=${candidates.length}`);
+
+        const signals = [];
+        for (let i = 0; i < candidates.length; i++) {
+          const c = candidates[i];
+          const txs = await scanCall(chain, apiKey, {
+            module: "account",
+            action: "tokentx",
+            contractaddress: tokenAddress,
+            address: c.address,
+            page: 1,
+            offset: 1000,
+            startblock: 0,
+            endblock: 99999999,
+            sort: "asc",
+          });
+          const pass = passBehavior(txs, c.address, sinceTs, inboundRatioThreshold, minSenders);
+          if (pass) {
+            signals.push({
+              address: c.address,
+              token_amount: c.token_amount,
+              usd_value: c.usd_value,
+              tx_count_after_since: pass.txCountAfterSince,
+              inbound_ratio: pass.inboundRatio,
+              unique_senders: pass.uniqueSenders,
+            });
+          }
+          if ((i + 1) % 10 === 0) log(`[INFO] analyzed ${i + 1}/${candidates.length}`);
+        }
+
+        latestSignals = signals;
+        render(signals);
+        downloadBtn.disabled = signals.length === 0;
+        log(`[DONE] signals=${signals.length}`);
+      } catch (e) {
+        log(`[ERROR] ${e.message}`);
+      } finally {
+        runBtn.disabled = false;
+      }
+    };
+
+    downloadBtn.onclick = () => downloadCsv(latestSignals);
+  </script>
+</body>
+</html>
