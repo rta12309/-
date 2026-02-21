@@ -309,6 +309,8 @@ const DEXSCREENER_CHAIN_KEYS = {
   '43114': 'avalanche',
   solana: 'solana',
 };
+const COVALENT_SUPPORTED_CHAIN_IDS = new Set(['1', '10', '56', '137', '8453', '42161', '43114']);
+const COVALENT_API_KEY = 'ckey_demo';
 
 const enabled = {
   upbit: true,
@@ -947,6 +949,34 @@ function parseTokenAmount(rawQty, decimals) {
   return Number(composed);
 }
 
+
+async function fetchSolscanTokenMeta(address) {
+  const metaByMint = new Map();
+  if (!address) return metaByMint;
+
+  try {
+    const payload = await safeFetchJsonGetWithFallback(
+      `https://api-v2.solscan.io/v2/account/token-accounts?address=${encodeURIComponent(
+        address
+      )}&page=1&page_size=200&type=token`
+    );
+
+    const rows = payload?.data?.tokenAccounts || [];
+    rows.forEach((token) => {
+      const mint = String(token.tokenAddress || token.mint || '').trim();
+      if (!mint) return;
+      metaByMint.set(mint, {
+        symbol: token.symbol || token.tokenSymbol || token.tokenName || '',
+        priceUsd: Number(token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? 0),
+      });
+    });
+  } catch (error) {
+    return metaByMint;
+  }
+
+  return metaByMint;
+}
+
 async function fetchSolanaMintPrices(mints) {
   const prices = {};
   if (!mints.length) return prices;
@@ -1127,10 +1157,11 @@ async function fetchSolanaWallet(address) {
         const amount = Number(info?.tokenAmount?.uiAmount || 0);
         const mint = String(info?.mint || '').trim();
         const dexRow = dexMeta.get(mint.toLowerCase());
-        const priceUsd = Number(mintPrices?.[mint] || dexRow?.priceUsd || 0);
+        const solscanMeta = solscanMetaByMint.get(mint);
+        const priceUsd = Number(mintPrices?.[mint] || solscanMeta?.priceUsd || dexRow?.priceUsd || 0);
 
         return {
-          symbol: dexRow?.symbol || tickerMap.get(mint) || mint.slice(0, 4) + '...' + mint.slice(-4),
+          symbol: solscanMeta?.symbol || dexRow?.symbol || tickerMap.get(mint) || mint.slice(0, 4) + '...' + mint.slice(-4),
           amount,
           priceUsd,
           valueUsd: amount * priceUsd,
@@ -1164,10 +1195,11 @@ async function fetchSolanaWalletFromSolscan(address, rpcError = null) {
 
     const tokenData = payload?.data?.tokenAccounts || [];
     const mints = [...new Set(tokenData.map((token) => token.tokenAddress || token.mint).filter(Boolean))];
-    const [tickerMap, mintPrices, dexMeta] = await Promise.all([
+    const [tickerMap, mintPrices, dexMeta, solscanMetaByMint] = await Promise.all([
       getSolanaTickerMap(),
       fetchSolanaMintPrices(mints),
       fetchDexScreenerTokenMeta(mints, DEXSCREENER_CHAIN_KEYS.solana),
+      fetchSolscanTokenMeta(address),
     ]);
 
     return tokenData
@@ -1177,10 +1209,11 @@ async function fetchSolanaWalletFromSolscan(address, rpcError = null) {
         );
         const mint = String(token.tokenAddress || token.mint || '').trim();
         const dexRow = dexMeta.get(mint.toLowerCase());
+        const solscanMeta = solscanMetaByMint.get(mint);
         const symbol =
-          token.symbol || token.tokenSymbol || dexRow?.symbol || tickerMap.get(mint) || token.tokenName || (mint ? `${mint.slice(0, 4)}...${mint.slice(-4)}` : 'UNKNOWN');
+          token.symbol || token.tokenSymbol || solscanMeta?.symbol || dexRow?.symbol || tickerMap.get(mint) || token.tokenName || (mint ? `${mint.slice(0, 4)}...${mint.slice(-4)}` : 'UNKNOWN');
         const priceUsd = Number(
-          token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? mintPrices?.[mint] ?? dexRow?.priceUsd ?? 0
+          mintPrices?.[mint] ?? token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? solscanMeta?.priceUsd ?? dexRow?.priceUsd ?? 0
         );
 
         return {
@@ -1264,6 +1297,11 @@ async function fetchExplorerTokenBalances(chainId, address) {
     }
   }
 
+  if (!rows.length) {
+    const covalentFallback = await fetchCovalentTokenBalances(chainId, address).catch(() => []);
+    if (covalentFallback.length) return covalentFallback;
+  }
+
   if (!rows.length && chainId === '56') {
     const bscFallback = await fetchBscTokenBalancesFromTransfers(address).catch(() => []);
     if (bscFallback.length) return bscFallback;
@@ -1315,6 +1353,32 @@ async function fetchExplorerTokenBalances(chainId, address) {
       priceUsd: Number(token.priceUsd || 0),
       valueUsd: token.amount * Number(token.priceUsd || 0),
     }))
+    .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+}
+
+
+async function fetchCovalentTokenBalances(chainId, address) {
+  if (!COVALENT_SUPPORTED_CHAIN_IDS.has(String(chainId))) return [];
+
+  const endpoint = `https://api.covalenthq.com/v1/${encodeURIComponent(
+    String(chainId)
+  )}/address/${encodeURIComponent(address)}/balances_v2/?quote-currency=USD&nft=false&no-nft-fetch=true&key=${encodeURIComponent(COVALENT_API_KEY)}`;
+  const payload = await safeFetchJsonGetWithFallback(endpoint);
+  const items = payload?.data?.items || [];
+
+  return items
+    .map((item) => {
+      const decimals = Number(item?.contract_decimals || 0);
+      const amount = parseTokenAmount(item?.balance ?? 0, decimals);
+      const priceUsd = Number(item?.quote_rate || 0);
+      const quote = Number(item?.quote || amount * priceUsd || 0);
+      return {
+        symbol: item?.contract_ticker_symbol || item?.contract_name || 'UNKNOWN',
+        amount,
+        priceUsd,
+        valueUsd: Number.isFinite(quote) ? quote : amount * priceUsd,
+      };
+    })
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
 }
 
