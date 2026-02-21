@@ -925,14 +925,7 @@ async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
   );
 
   if (!merged.length) {
-    if (explorerResult.status === 'rejected' && nativeResult.status === 'rejected') {
-      throw new Error('EVM 조회 실패: RPC/Explorer 응답을 확인해 주세요.');
-    }
-
-    if (explorerResult.status === 'rejected') {
-      throw new Error(`토큰 조회 실패: ${normalizeErrorMessage(explorerResult.reason)}`);
-    }
-
+    // 외부 API 차단/레이트리밋이 잦아 전체 실패 에러 대신 빈 결과로 degrade 처리
     return [];
   }
 
@@ -1052,8 +1045,12 @@ async function fetchCovalentTokenBalances(chainId, address) {
       const amount = parseTokenAmount(item?.balance ?? 0, decimals);
       const priceUsd = Number(item?.quote_rate || 0);
       const quote = Number(item?.quote || amount * priceUsd || 0);
+      const contract = String(item?.contract_address || '').toLowerCase();
       return {
-        symbol: item?.contract_ticker_symbol || item?.contract_name || 'UNKNOWN',
+        symbol:
+          item?.contract_ticker_symbol ||
+          item?.contract_name ||
+          (contract ? `${contract.slice(0, 6)}...${contract.slice(-4)}` : 'UNKNOWN'),
         amount,
         priceUsd,
         valueUsd: Number.isFinite(quote) ? quote : amount * priceUsd,
@@ -1061,11 +1058,7 @@ async function fetchCovalentTokenBalances(chainId, address) {
     })
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
 
-  if (tokens.some((token) => token.symbol && token.symbol !== 'UNKNOWN')) {
-    return tokens;
-  }
-
-  return [];
+  return tokens;
 }
 
 async function fetchEvmTokenBalancesFromTransfers(chainId, address) {
