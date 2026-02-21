@@ -909,6 +909,20 @@ async function fetchSolPriceUsd() {
     // fallback failed
   }
 
+  try {
+    const [upbitSol, upbitUsdt] = await Promise.all([
+      safeFetchJsonGetWithFallback('https://api.upbit.com/v1/ticker?markets=KRW-SOL'),
+      safeFetchJsonGetWithFallback('https://api.upbit.com/v1/ticker?markets=KRW-USDT'),
+    ]);
+    const solKrw = Number(upbitSol?.[0]?.trade_price || 0);
+    const usdtKrw = Number(upbitUsdt?.[0]?.trade_price || 0) || usdtKrwRate;
+    if (solKrw > 0 && usdtKrw > 0) {
+      return solKrw / usdtKrw;
+    }
+  } catch (error) {
+    // fallback failed
+  }
+
   return 0;
 }
 
@@ -930,6 +944,26 @@ async function fetchSolanaWallet(address) {
         .map((item) => item?.account?.data?.parsed?.info?.mint)
         .filter((mint) => typeof mint === 'string' && mint.length > 0)
     )];
+
+    let solscanMetaByMint = new Map();
+    try {
+      const solscanMeta = await safeFetchJsonGetWithFallback(
+        `https://api-v2.solscan.io/v2/account/token-accounts?address=${encodeURIComponent(
+          address
+        )}&page=1&page_size=200&type=token`
+      );
+      const rows = solscanMeta?.data?.tokenAccounts || [];
+      rows.forEach((token) => {
+        const mint = token.tokenAddress || token.mint;
+        if (!mint) return;
+        solscanMetaByMint.set(mint, {
+          symbol: token.symbol || token.tokenSymbol || token.tokenName || '',
+          priceUsd: Number(token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? 0),
+        });
+      });
+    } catch (error) {
+      solscanMetaByMint = new Map();
+    }
 
     let mintPrices = {};
     const tickerMap = await getSolanaTickerMap();
@@ -953,10 +987,11 @@ async function fetchSolanaWallet(address) {
         const info = item?.account?.data?.parsed?.info || {};
         const amount = Number(info?.tokenAmount?.uiAmount || 0);
         const mint = info?.mint || 'UNKNOWN';
-        const priceUsd = Number(mintPrices?.[mint]?.price || 0);
+        const meta = solscanMetaByMint.get(mint);
+        const priceUsd = Number(mintPrices?.[mint]?.price || meta?.priceUsd || 0);
 
         return {
-          symbol: tickerMap.get(mint) || mint.slice(0, 4) + '...' + mint.slice(-4),
+          symbol: meta?.symbol || tickerMap.get(mint) || mint.slice(0, 4) + '...' + mint.slice(-4),
           amount,
           priceUsd,
           valueUsd: amount * priceUsd,
@@ -1086,7 +1121,7 @@ async function fetchExplorerTokenBalances(chainId, address) {
   let lastError = null;
   for (const url of candidates) {
     try {
-      const payload = await safeFetchJson(url);
+      const payload = await safeFetchJsonGetWithFallback(url);
       const parsed = parseExplorerRows(payload?.result);
       if (parsed.length) {
         rows = parsed;
@@ -1134,7 +1169,7 @@ async function fetchBscTokenBalancesFromTransfers(address) {
         address
       )}&startblock=0&endblock=99999999&page=${page}&offset=${offset}&sort=asc`;
 
-    const payload = await safeFetchJson(endpoint);
+    const payload = await safeFetchJsonGetWithFallback(endpoint);
     const pageRows = parseExplorerRows(payload?.result);
     if (!pageRows.length) break;
 
