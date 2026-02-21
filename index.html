@@ -87,6 +87,12 @@
     const on = (id) => document.getElementById(id).checked;
     const log = (msg) => { logEl.textContent += `${msg}\n`; logEl.scrollTop = logEl.scrollHeight; };
 
+    function explainFetchFailure(context) {
+      log(`[ERROR] ${context}: Failed to fetch`);
+      log('[INFO] 원인 후보: (1) 브라우저 CORS 차단, (2) API 서버 일시 장애/차단, (3) 네트워크/VPN/광고차단 확장프로그램 간섭, (4) API 키/요금제 제한으로 비정상 응답.');
+      log('[INFO] 해결 방법: 로컬 서버(http://localhost)로 열기, 다른 브라우저/시크릿 모드 시도, 광고차단 해제, API 키 입력, 잠시 후 재시도.');
+    }
+
     function getSettings() {
       return {
         useUsdFilter: on('useUsdFilter'),
@@ -110,7 +116,15 @@
       const payload = { ...params };
       if (apiKey) payload.apikey = apiKey;
       Object.entries(payload).forEach(([k, v]) => url.searchParams.set(k, v));
-      const res = await fetch(url);
+      let res;
+      try {
+        res = await fetch(url);
+      } catch (e) {
+        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) {
+          explainFetchFailure(`scanCall(${params.module}:${params.action})`);
+        }
+        throw e;
+      }
       if (!res.ok) throw new Error(`scan api http error ${res.status}`);
       const data = await res.json();
       if (String(data.status) === "0" && (data.result === "" || data.result == null)) throw new Error(`scan api error: ${data.message} / ${data.result}`);
@@ -119,7 +133,13 @@
 
     async function resolveTokenAddress(chain, ticker) {
       const platform = SCAN_CONFIG[chain].cgPlatform;
-      const coins = await (await fetch("https://api.coingecko.com/api/v3/coins/list?include_platform=true")).json();
+      let coins;
+      try {
+        coins = await (await fetch("https://api.coingecko.com/api/v3/coins/list?include_platform=true")).json();
+      } catch (e) {
+        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) explainFetchFailure('coingecko coins list');
+        throw e;
+      }
       const matches = coins.filter(c => (c.symbol || "").toLowerCase() === ticker.toLowerCase() && c.platforms && c.platforms[platform]);
       if (!matches.length) throw new Error(`CoinGecko에서 ${chain}:${ticker}를 찾지 못했습니다.`);
       let best = null;
@@ -138,7 +158,13 @@
       const u = new URL(`https://api.coingecko.com/api/v3/simple/token_price/${platform}`);
       u.searchParams.set("contract_addresses", contract);
       u.searchParams.set("vs_currencies", "usd");
-      const data = await (await fetch(u)).json();
+      let data;
+      try {
+        data = await (await fetch(u)).json();
+      } catch (e) {
+        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) explainFetchFailure('coingecko token price');
+        throw e;
+      }
       const price = data?.[contract.toLowerCase()]?.usd ?? data?.[contract]?.usd;
       if (price == null) throw new Error("토큰 가격 조회 실패");
       return Number(price);
@@ -288,7 +314,11 @@
           render([{ address: target, token_amount: tokenAmount, usd_value: usdValue, tx_count_after_since: behavior.detail.txCountAfterSince, inbound_ratio: behavior.detail.inboundRatio, unique_senders: behavior.detail.uniqueSenders }]);
         }
       } catch (e) {
+        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) {
+        explainFetchFailure('요청');
+      } else {
         log(`[ERROR] ${e.message}`);
+      }
       } finally {
         checkBtn.disabled = false;
       }
@@ -365,7 +395,11 @@
         downloadBtn.disabled = signals.length === 0;
         log(`[DONE] signals=${signals.length}`);
       } catch (e) {
+        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) {
+        explainFetchFailure('요청');
+      } else {
         log(`[ERROR] ${e.message}`);
+      }
       } finally {
         runBtn.disabled = false;
       }
