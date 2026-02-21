@@ -846,21 +846,82 @@ async function fetchEthereumWalletFromEthplorer(address) {
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
 }
 
+function parseSolanaTokenList(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (payload && Array.isArray(payload.tokens)) return payload.tokens;
+  if (payload && Array.isArray(payload.data)) return payload.data;
+  return [];
+}
+
+async function fetchSolanaMintPrices(mints) {
+  const prices = {};
+  if (!mints.length) return prices;
+
+  const chunkSize = 50;
+  for (let i = 0; i < mints.length; i += chunkSize) {
+    const chunk = mints.slice(i, i + chunkSize);
+    const ids = encodeURIComponent(chunk.join(','));
+
+    try {
+      const v6 = await safeFetchJsonGetWithFallback(`https://price.jup.ag/v6/price?ids=${ids}`);
+      const data = v6?.data || {};
+      Object.entries(data).forEach(([mint, row]) => {
+        const price = Number(row?.price || 0);
+        if (price > 0) prices[mint] = price;
+      });
+    } catch (error) {
+      // try v4 below
+    }
+
+    const unresolved = chunk.filter((mint) => !prices[mint]);
+    if (!unresolved.length) continue;
+
+    try {
+      const v4 = await safeFetchJsonGetWithFallback(
+        `https://price.jup.ag/v4/price?ids=${encodeURIComponent(unresolved.join(','))}`
+      );
+      const data = v4?.data || {};
+      Object.entries(data).forEach(([mint, row]) => {
+        const price = Number(row?.price || 0);
+        if (price > 0) prices[mint] = price;
+      });
+    } catch (error) {
+      // keep unresolved as 0
+    }
+  }
+
+  return prices;
+}
+
 async function getSolanaTickerMap() {
   if (!solanaTickerMapPromise) {
-    solanaTickerMapPromise = safeFetchJsonGetWithFallback('https://token.jup.ag/all')
-      .then((tokens) => {
-        const map = new Map();
-        (Array.isArray(tokens) ? tokens : []).forEach((token) => {
-          const mint = token?.address;
-          const symbol = token?.symbol;
-          if (typeof mint === 'string' && mint && typeof symbol === 'string' && symbol) {
-            map.set(mint, symbol);
-          }
-        });
-        return map;
-      })
-      .catch(() => new Map());
+    solanaTickerMapPromise = (async () => {
+      const urls = [
+        'https://token.jup.ag/all',
+        'https://cache.jup.ag/tokens',
+        'https://token.jup.ag/strict',
+      ];
+
+      const map = new Map();
+      for (const url of urls) {
+        try {
+          const payload = await safeFetchJsonGetWithFallback(url);
+          const tokens = parseSolanaTokenList(payload);
+          tokens.forEach((token) => {
+            const mint = token?.address;
+            const symbol = token?.symbol;
+            if (typeof mint === 'string' && mint && typeof symbol === 'string' && symbol) {
+              if (!map.has(mint)) map.set(mint, symbol);
+            }
+          });
+          if (map.size > 1000) break;
+        } catch (error) {
+          // try next source
+        }
+      }
+
+      return map;
+    })().catch(() => new Map());
   }
 
   return solanaTickerMapPromise;
@@ -901,7 +962,7 @@ async function fetchSolPriceUsd() {
 
   try {
     const jupiter = await safeFetchJsonGetWithFallback(
-      'https://price.jup.ag/v4/price?ids=So11111111111111111111111111111111111111112'
+      'https://price.jup.ag/v6/price?ids=So11111111111111111111111111111111111111112'
     );
     const jupiterPrice = Number(jupiter?.data?.So11111111111111111111111111111111111111112?.price || 0);
     if (jupiterPrice > 0) return jupiterPrice;
@@ -965,18 +1026,8 @@ async function fetchSolanaWallet(address) {
       solscanMetaByMint = new Map();
     }
 
-    let mintPrices = {};
     const tickerMap = await getSolanaTickerMap();
-    if (mints.length) {
-      try {
-        const pricePayload = await safeFetchJsonGetWithFallback(
-          `https://price.jup.ag/v4/price?ids=${encodeURIComponent(mints.join(','))}`
-        );
-        mintPrices = pricePayload?.data || {};
-      } catch (error) {
-        mintPrices = {};
-      }
-    }
+    const mintPrices = await fetchSolanaMintPrices(mints);
 
     const solAmount = Number(solBalancePayload?.result?.value || 0) / 1_000_000_000;
 
@@ -988,7 +1039,7 @@ async function fetchSolanaWallet(address) {
         const amount = Number(info?.tokenAmount?.uiAmount || 0);
         const mint = info?.mint || 'UNKNOWN';
         const meta = solscanMetaByMint.get(mint);
-        const priceUsd = Number(mintPrices?.[mint]?.price || meta?.priceUsd || 0);
+        const priceUsd = Number(mintPrices?.[mint] || meta?.priceUsd || 0);
 
         return {
           symbol: meta?.symbol || tickerMap.get(mint) || mint.slice(0, 4) + '...' + mint.slice(-4),
@@ -1027,17 +1078,7 @@ async function fetchSolanaWalletFromSolscan(address, rpcError = null) {
     const tickerMap = await getSolanaTickerMap();
     const mints = [...new Set(tokenData.map((token) => token.tokenAddress || token.mint).filter(Boolean))];
 
-    let mintPrices = {};
-    if (mints.length) {
-      try {
-        const pricePayload = await safeFetchJsonGetWithFallback(
-          `https://price.jup.ag/v4/price?ids=${encodeURIComponent(mints.join(','))}`
-        );
-        mintPrices = pricePayload?.data || {};
-      } catch (error) {
-        mintPrices = {};
-      }
-    }
+    const mintPrices = await fetchSolanaMintPrices(mints);
 
     return tokenData
       .map((token) => {
@@ -1048,7 +1089,7 @@ async function fetchSolanaWalletFromSolscan(address, rpcError = null) {
         const symbol =
           token.symbol || token.tokenSymbol || tickerMap.get(mint) || token.tokenName || mint.slice(0, 4) + '...' + mint.slice(-4) || 'UNKNOWN';
         const priceUsd = Number(
-          token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? mintPrices?.[mint]?.price ?? 0
+          token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? mintPrices?.[mint] ?? 0
         );
 
         return {
@@ -1163,16 +1204,42 @@ async function fetchBscTokenBalancesFromTransfers(address) {
   const maxPages = 20;
   const rows = [];
 
+  const makeV2Url = (page) => {
+    const q = new URLSearchParams({
+      chainid: '56',
+      module: 'account',
+      action: 'tokentx',
+      address,
+      startblock: '0',
+      endblock: '99999999',
+      page: String(page),
+      offset: String(offset),
+      sort: 'asc',
+    });
+    if (ETHERSCAN_API_KEY) q.set('apikey', ETHERSCAN_API_KEY);
+    return `${ETHERSCAN_V2_ENDPOINT}?${q.toString()}`;
+  };
+
+  const makeV1Url = (page) =>
+    `${EXPLORER_V1_ENDPOINTS['56']}?module=account&action=tokentx&address=${encodeURIComponent(
+      address
+    )}&startblock=0&endblock=99999999&page=${page}&offset=${offset}&sort=asc`;
+
   for (let page = 1; page <= maxPages; page += 1) {
-    const endpoint =
-      `${EXPLORER_V1_ENDPOINTS['56']}?module=account&action=tokentx&address=${encodeURIComponent(
-        address
-      )}&startblock=0&endblock=99999999&page=${page}&offset=${offset}&sort=asc`;
+    let pageRows = [];
+    try {
+      const payload = await safeFetchJsonGetWithFallback(makeV2Url(page));
+      pageRows = parseExplorerRows(payload?.result);
+    } catch (error) {
+      try {
+        const payload = await safeFetchJsonGetWithFallback(makeV1Url(page));
+        pageRows = parseExplorerRows(payload?.result);
+      } catch (error2) {
+        pageRows = [];
+      }
+    }
 
-    const payload = await safeFetchJsonGetWithFallback(endpoint);
-    const pageRows = parseExplorerRows(payload?.result);
     if (!pageRows.length) break;
-
     rows.push(...pageRows);
     if (pageRows.length < offset) break;
   }
