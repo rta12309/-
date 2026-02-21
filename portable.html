@@ -756,6 +756,16 @@ async function analyzeGroup(groupNode) {
   }
 }
 
+
+function extractErrorCode(message) {
+  const text = String(message || '');
+  const statusMatch = text.match(/요청 실패 \((\d{3})\)/);
+  if (statusMatch) return statusMatch[1];
+  if (text.includes('JSON이 아닌 응답')) return 'NON_JSON';
+  if (text.includes('Failed to fetch') || text.includes('NetworkError')) return 'NETWORK';
+  return 'UNKNOWN';
+}
+
 function normalizeErrorMessage(error) {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('요청 실패 (403)')) {
@@ -1181,16 +1191,11 @@ async function fetchSolanaWalletFromSolscan(address, rpcError = null) {
       })
       .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
   } catch (solscanError) {
-    const rpcMessage = rpcError ? normalizeErrorMessage(rpcError) : '';
+    const rpcMessage = rpcError ? normalizeErrorMessage(rpcError) : '없음';
     const solscanMessage = normalizeErrorMessage(solscanError);
-    return [
-      {
-        symbol: 'SOL',
-        amount: 0,
-        priceUsd: await fetchSolPriceUsd().catch(() => 0),
-        valueUsd: 0,
-      },
-    ];
+    const rpcCode = extractErrorCode(rpcMessage);
+    const solscanCode = extractErrorCode(solscanMessage);
+    throw new Error(`Solana 조회 실패 [RPC:${rpcCode} / Solscan:${solscanCode}] (${rpcMessage} / ${solscanMessage})`);
   }
 }
 
@@ -1208,8 +1213,22 @@ async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
   );
 
   if (!merged.length) {
-    // 외부 API 차단/레이트리밋이 잦아 전체 실패 에러 대신 빈 결과로 degrade 처리
-    return [];
+    const explorerMessage =
+      explorerResult.status === 'rejected' ? normalizeErrorMessage(explorerResult.reason) : 'Explorer empty';
+    const nativeMessage =
+      nativeResult.status === 'rejected' ? normalizeErrorMessage(nativeResult.reason) : 'RPC empty';
+    throw new Error(
+      `EVM 조회 실패 [Explorer:${extractErrorCode(explorerMessage)} / RPC:${extractErrorCode(nativeMessage)}] (${explorerMessage} / ${nativeMessage})`
+    );
+  }
+
+  if (explorerResult.status === 'rejected') {
+    const explorerMessage = normalizeErrorMessage(explorerResult.reason);
+    throw new Error(`토큰 조회 실패 [Explorer:${extractErrorCode(explorerMessage)}] ${explorerMessage}`);
+  }
+
+  if (!explorerTokens.length) {
+    throw new Error('토큰 조회 실패 [Explorer:EMPTY] 탐색기 토큰 데이터가 비어 있습니다.');
   }
 
   return merged;
