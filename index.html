@@ -297,7 +297,51 @@
       return Array.from(agg.entries()).map(([address, token_amount]) => ({ address, token_amount, usd_value: 0 }));
     }
 
+    async function getWalletTokenTxWithFallback(chain, apiKey, tokenAddress, address) {
+      const addr = String(address).toLowerCase();
+      const ca = String(tokenAddress).toLowerCase();
+
+      // 1) standard explorer path
+      const primary = await scanCall(chain, apiKey, {
+        module: 'account', action: 'tokentx', contractaddress: tokenAddress,
+        address, page: 1, offset: 1000, startblock: 0, endblock: 99999999, sort: 'asc'
+      });
+      if (Array.isArray(primary) && primary.length) return primary;
+
+      // 2) explorer fallback: wallet all token tx -> filter by contract
+      const allTx = await scanCall(chain, apiKey, {
+        module: 'account', action: 'tokentx',
+        address, page: 1, offset: 1000, startblock: 0, endblock: 99999999, sort: 'asc'
+      });
+      if (Array.isArray(allTx) && allTx.length) {
+        const filtered = allTx.filter((t) => String(t.contractAddress || '').toLowerCase() === ca);
+        if (filtered.length) return filtered;
+      }
+
+      // 3) ethereum-only fallback via ethplorer history
+      if (chain === 'ethereum') {
+        try {
+          const hist = await safeFetchJson(`https://api.ethplorer.io/getAddressHistory/${encodeURIComponent(address)}?apiKey=freekey&type=transfer&limit=1000`);
+          const ops = hist?.operations || [];
+          const mapped = ops
+            .filter((op) => String(op?.tokenInfo?.address || '').toLowerCase() === ca)
+            .map((op) => ({
+              timeStamp: String(op.timestamp || 0),
+              from: String(op.from || ''),
+              to: String(op.to || ''),
+              contractAddress: String(op?.tokenInfo?.address || tokenAddress),
+            }));
+          if (mapped.length) return mapped;
+        } catch (e) {
+          log(`[WARN] ethplorer tx fallback 실패: ${String(e.message || e)}`);
+        }
+      }
+
+      return [];
+    }
+
     function passBehavior(txs, address, sinceTs, settings) {
+
       if (!Array.isArray(txs) || !txs.length) return { pass: false, reason: '토큰 tx 없음', detail: null };
       const timestamps = txs.map((t) => Number(t.timeStamp || 0)).filter(Boolean);
       if (!timestamps.length) return { pass: false, reason: '유효한 timestamp 없음', detail: null };
@@ -471,9 +515,10 @@
           }
         }
 
-        const txs = await scanCall(chain, apiKey, { module: 'account', action: 'tokentx', contractaddress: tokenAddress, address: target, page: 1, offset: 1000, startblock: 0, endblock: 99999999, sort: 'asc' });
+        const txs = await getWalletTokenTxWithFallback(chain, apiKey, tokenAddress, target);
         const behaviorOff = !settings.useSinceFirstTx && !settings.useInboundRatio && !settings.useUniqueSenders;
         const behavior = behaviorOff ? { pass: true, reason: '행동조건 OFF', detail: { txCountAfterSince: 0, inboundRatio: 0, uniqueSenders: 0 } } : passBehavior(txs, target, sinceTs, settings);
+        if (!behaviorOff && (!Array.isArray(txs) || !txs.length)) log('[WARN] 토큰 tx가 비어 explorer/ethplorer fallback까지 시도했지만 데이터를 찾지 못했습니다.');
 
         const finalPass = usdPass && behavior.pass;
         log(`[INFO] target=${target}`);
@@ -553,7 +598,7 @@
           for (const c of candidates) signals.push({ address: c.address, token_amount: c.token_amount, usd_value: c.usd_value, tx_count_after_since: 0, inbound_ratio: 0, unique_senders: 0 });
         } else {
           for (const c of candidates) {
-            const txs = await scanCall(chain, apiKey, { module: 'account', action: 'tokentx', contractaddress: tokenAddress, address: c.address, page: 1, offset: 1000, startblock: 0, endblock: 99999999, sort: 'asc' });
+            const txs = await getWalletTokenTxWithFallback(chain, apiKey, tokenAddress, c.address);
             const r = passBehavior(txs, c.address, sinceTs, settings);
             if (r.pass) signals.push({ address: c.address, token_amount: c.token_amount, usd_value: c.usd_value, tx_count_after_since: r.detail.txCountAfterSince, inbound_ratio: r.detail.inboundRatio, unique_senders: r.detail.uniqueSenders });
           }
