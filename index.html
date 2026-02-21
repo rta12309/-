@@ -117,7 +117,10 @@
       try {
         res = await fetch(url, options);
       } catch (e) {
-        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) explainFetchFailure(`safeFetchJson(${url})`);
+        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) {
+          explainFetchFailure(`safeFetchJson(${url})`);
+          e.__explained = true;
+        }
         throw e;
       }
       if (!res.ok) throw new Error(`http ${res.status}: ${url}`);
@@ -135,6 +138,7 @@
       } catch (e) {
         if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) {
           explainFetchFailure(`scanCall(${params.module}:${params.action})`);
+          e.__explained = true;
         }
         throw e;
       }
@@ -146,41 +150,69 @@
 
     async function resolveTokenAddress(chain, ticker) {
       const platform = SCAN_CONFIG[chain].cgPlatform;
-      let coins;
+      const tickerUpper = ticker.toUpperCase();
+
+      // 1) CoinGecko search endpoint (lighter than full coins list)
       try {
-        coins = await (await fetch("https://api.coingecko.com/api/v3/coins/list?include_platform=true")).json();
+        const search = await safeFetchJson(`https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(ticker)}`);
+        const coins = search?.coins || [];
+        let best = null;
+        for (const coin of coins.slice(0, 15)) {
+          const detail = await safeFetchJson(`https://api.coingecko.com/api/v3/coins/${coin.id}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false`);
+          const contract = detail?.platforms?.[platform];
+          if (!contract) continue;
+          const marketCap = Number(detail?.market_data?.market_cap?.usd || 0);
+          if (!best || marketCap > best.marketCap) best = { contract, marketCap };
+        }
+        if (best?.contract) return best.contract;
       } catch (e) {
-        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) explainFetchFailure('coingecko coins list');
-        throw e;
+        log(`[WARN] CoinGecko 주소 탐색 실패: ${String(e.message || e)}`);
       }
-      const matches = coins.filter(c => (c.symbol || "").toLowerCase() === ticker.toLowerCase() && c.platforms && c.platforms[platform]);
-      if (!matches.length) throw new Error(`CoinGecko에서 ${chain}:${ticker}를 찾지 못했습니다.`);
-      let best = null;
-      for (const coin of matches.slice(0, 20)) {
-        const detail = await (await fetch(`https://api.coingecko.com/api/v3/coins/${coin.id}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false`)).json();
-        const marketCap = Number(detail?.market_data?.market_cap?.usd || 0);
-        const contract = detail?.platforms?.[platform];
-        if (contract && (!best || marketCap > best.marketCap)) best = { contract, marketCap };
+
+      // 2) Dexscreener fallback
+      try {
+        const ds = await safeFetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(ticker)}`);
+        const chainMap = { ethereum: 'ethereum', bsc: 'bsc', polygon: 'polygon', arbitrum: 'arbitrum', optimism: 'optimism' };
+        const pairs = (ds?.pairs || []).filter((p) => p.chainId === chainMap[chain]);
+        const matched = pairs.filter((p) => String(p.baseToken?.symbol || '').toUpperCase() === tickerUpper || String(p.quoteToken?.symbol || '').toUpperCase() === tickerUpper);
+        matched.sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0));
+        if (matched.length) {
+          const p = matched[0];
+          const baseHit = String(p.baseToken?.symbol || '').toUpperCase() === tickerUpper;
+          return baseHit ? p.baseToken.address : p.quoteToken.address;
+        }
+      } catch (e) {
+        log(`[WARN] Dexscreener 주소 탐색 실패: ${String(e.message || e)}`);
       }
-      if (!best) throw new Error("토큰 주소 자동 탐색 실패");
-      return best.contract;
+
+      throw new Error(`토큰 주소 자동 탐색 실패: ticker=${ticker}. 토큰 CA 주소를 직접 입력해 주세요.`);
     }
 
     async function getTokenPrice(chain, contract) {
       const platform = SCAN_CONFIG[chain].cgPlatform;
-      const u = new URL(`https://api.coingecko.com/api/v3/simple/token_price/${platform}`);
-      u.searchParams.set("contract_addresses", contract);
-      u.searchParams.set("vs_currencies", "usd");
-      let data;
+      const chainMap = { ethereum: 'ethereum', bsc: 'bsc', polygon: 'polygon', arbitrum: 'arbitrum', optimism: 'optimism' };
+
       try {
-        data = await (await fetch(u)).json();
+        const u = new URL(`https://api.coingecko.com/api/v3/simple/token_price/${platform}`);
+        u.searchParams.set("contract_addresses", contract);
+        u.searchParams.set("vs_currencies", "usd");
+        const data = await safeFetchJson(u.toString());
+        const price = data?.[contract.toLowerCase()]?.usd ?? data?.[contract]?.usd;
+        if (price != null) return Number(price);
       } catch (e) {
-        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) explainFetchFailure('coingecko token price');
-        throw e;
+        log(`[WARN] CoinGecko 가격 조회 실패: ${String(e.message || e)}`);
       }
-      const price = data?.[contract.toLowerCase()]?.usd ?? data?.[contract]?.usd;
-      if (price == null) throw new Error("토큰 가격 조회 실패");
-      return Number(price);
+
+      try {
+        const ds = await safeFetchJson(`https://api.dexscreener.com/latest/dex/tokens/${contract}`);
+        const pairs = (ds?.pairs || []).filter((p) => p.chainId === chainMap[chain]);
+        pairs.sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0));
+        if (pairs.length && Number.isFinite(Number(pairs[0].priceUsd))) return Number(pairs[0].priceUsd);
+      } catch (e) {
+        log(`[WARN] Dexscreener 가격 조회 실패: ${String(e.message || e)}`);
+      }
+
+      throw new Error("토큰 가격 조회 실패");
     }
 
     async function getTokenDecimals(chain, apiKey, tokenAddress) {
@@ -454,7 +486,7 @@
         }
       } catch (e) {
         if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) {
-        explainFetchFailure('요청');
+        if (!e.__explained) explainFetchFailure('요청');
       } else {
         log(`[ERROR] ${e.message}`);
       }
@@ -535,7 +567,7 @@
         log(`[DONE] signals=${signals.length}`);
       } catch (e) {
         if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) {
-        explainFetchFailure('요청');
+        if (!e.__explained) explainFetchFailure('요청');
       } else {
         log(`[ERROR] ${e.message}`);
       }
