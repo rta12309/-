@@ -285,6 +285,15 @@ const MAX_WALLETS_PER_GROUP = 10;
 const MIN_AUTO_REFRESH_SECONDS = 5;
 const ETHERSCAN_V2_ENDPOINT = 'https://api.etherscan.io/v2/api';
 const ETHERSCAN_API_KEY = '';
+const EXPLORER_API_CONFIG = {
+  '1': { v2: 'https://api.etherscan.io/v2/api', v1: 'https://api.etherscan.io/api', apiKey: '' },
+  '10': { v2: 'https://api-optimistic.etherscan.io/v2/api', v1: 'https://api-optimistic.etherscan.io/api', apiKey: '' },
+  '56': { v2: 'https://api.bscscan.com/v2/api', v1: 'https://api.bscscan.com/api', apiKey: '' },
+  '137': { v2: 'https://api.polygonscan.com/v2/api', v1: 'https://api.polygonscan.com/api', apiKey: '' },
+  '8453': { v2: 'https://api.basescan.org/v2/api', v1: 'https://api.basescan.org/api', apiKey: '' },
+  '42161': { v2: 'https://api.arbiscan.io/v2/api', v1: 'https://api.arbiscan.io/api', apiKey: '' },
+  '43114': { v2: 'https://api.snowtrace.io/v2/api', v1: 'https://api.snowtrace.io/api', apiKey: '' },
+};
 const SOLANA_RPC_ENDPOINTS = [
   'https://api.mainnet-beta.solana.com',
   'https://solana-rpc.publicnode.com',
@@ -305,6 +314,7 @@ const DEXSCREENER_CHAIN_KEYS = {
 const COVALENT_SUPPORTED_CHAIN_IDS = new Set(['1', '10', '56', '137', '8453', '42161', '43114']);
 const COVALENT_API_KEY = 'ckey_demo';
 const ETHERSCAN_FREE_PLAN_LIMIT_RE = /Free API access is not supported for this chain/i;
+const EXPLORER_V1_DEPRECATED_RE = /deprecated V1 endpoint/i;
 
 const enabled = {
   upbit: true,
@@ -332,7 +342,7 @@ const SOURCES = [
     label: 'BNB Smart Chain (RPC + CoinGecko)',
     chain: 'bsc',
     explorerBase: 'https://bscscan.com/address/',
-    apiExample: 'https://api.etherscan.io/v2/api?chainid=56&module=account&action=addresstokenbalance&address={address}',
+    apiExample: 'https://api.bscscan.com/api?module=account&action=addresstokenbalance&address={address}',
     fetcher: (address) => fetchEvmWallet(address, '56', 'https://bsc-dataseed.binance.org', 'binancecoin', 'BNB'),
   },
   {
@@ -340,7 +350,7 @@ const SOURCES = [
     label: 'Polygon (RPC + CoinGecko)',
     chain: 'polygon',
     explorerBase: 'https://polygonscan.com/address/',
-    apiExample: 'https://api.etherscan.io/v2/api?chainid=137&module=account&action=addresstokenbalance&address={address}',
+    apiExample: 'https://api.polygonscan.com/api?module=account&action=addresstokenbalance&address={address}',
     fetcher: (address) => fetchEvmWallet(address, '137', 'https://polygon-rpc.com', 'matic-network', 'MATIC'),
   },
   {
@@ -348,7 +358,7 @@ const SOURCES = [
     label: 'Arbitrum (RPC + CoinGecko)',
     chain: 'arbitrum',
     explorerBase: 'https://arbiscan.io/address/',
-    apiExample: 'https://api.etherscan.io/v2/api?chainid=42161&module=account&action=addresstokenbalance&address={address}',
+    apiExample: 'https://api.arbiscan.io/api?module=account&action=addresstokenbalance&address={address}',
     fetcher: (address) => fetchEvmWallet(address, '42161', 'https://arb1.arbitrum.io/rpc', 'ethereum', 'ETH'),
   },
   {
@@ -356,7 +366,7 @@ const SOURCES = [
     label: 'Optimism (RPC + CoinGecko)',
     chain: 'optimism',
     explorerBase: 'https://optimistic.etherscan.io/address/',
-    apiExample: 'https://api.etherscan.io/v2/api?chainid=10&module=account&action=addresstokenbalance&address={address}',
+    apiExample: 'https://api-optimistic.etherscan.io/api?module=account&action=addresstokenbalance&address={address}',
     fetcher: (address) => fetchEvmWallet(address, '10', 'https://mainnet.optimism.io', 'ethereum', 'ETH'),
   },
   {
@@ -364,7 +374,7 @@ const SOURCES = [
     label: 'Avalanche (RPC + CoinGecko)',
     chain: 'avalanche',
     explorerBase: 'https://snowtrace.io/address/',
-    apiExample: 'https://api.etherscan.io/v2/api?chainid=43114&module=account&action=addresstokenbalance&address={address}',
+    apiExample: 'https://api.snowtrace.io/api?module=account&action=addresstokenbalance&address={address}',
     fetcher: (address) =>
       fetchEvmWallet(address, '43114', 'https://api.avax.network/ext/bc/C/rpc', 'avalanche-2', 'AVAX'),
   },
@@ -373,7 +383,7 @@ const SOURCES = [
     label: 'Base (RPC + CoinGecko)',
     chain: 'base',
     explorerBase: 'https://basescan.org/address/',
-    apiExample: 'https://api.etherscan.io/v2/api?chainid=8453&module=account&action=addresstokenbalance&address={address}',
+    apiExample: 'https://api.basescan.org/api?module=account&action=addresstokenbalance&address={address}',
     fetcher: (address) => fetchEvmWallet(address, '8453', 'https://mainnet.base.org', 'ethereum', 'ETH'),
   },
   {
@@ -679,6 +689,36 @@ function isEtherscanFreePlanLimitError(error) {
   return ETHERSCAN_FREE_PLAN_LIMIT_RE.test(message);
 }
 
+function isExplorerV1DeprecatedError(error) {
+  const message = normalizeErrorMessage(error);
+  return EXPLORER_V1_DEPRECATED_RE.test(message);
+}
+
+function getExplorerApiConfig(chainId) {
+  return EXPLORER_API_CONFIG[String(chainId)] || { v2: ETHERSCAN_V2_ENDPOINT, v1: 'https://api.etherscan.io/api', apiKey: '' };
+}
+
+function buildExplorerCandidates(chainId, params) {
+  const cfg = getExplorerApiConfig(chainId);
+  const common = new URLSearchParams(params);
+  const urls = [];
+
+  if (cfg.v2) {
+    const q = new URLSearchParams(common);
+    q.set('chainid', String(chainId));
+    if (cfg.apiKey || ETHERSCAN_API_KEY) q.set('apikey', cfg.apiKey || ETHERSCAN_API_KEY);
+    urls.push(`${cfg.v2}?${q.toString()}`);
+  }
+
+  if (cfg.v1) {
+    const q = new URLSearchParams(common);
+    if (cfg.apiKey || ETHERSCAN_API_KEY) q.set('apikey', cfg.apiKey || ETHERSCAN_API_KEY);
+    urls.push(`${cfg.v1}?${q.toString()}`);
+  }
+
+  return urls;
+}
+
 async function analyzeAllGroups(refreshFx = true) {
   if (elements.analyzeAllBtn.disabled) {
     return;
@@ -758,6 +798,8 @@ function extractErrorCode(message) {
   const text = String(message || '');
   const statusMatch = text.match(/요청 실패 \((\d{3})\)/);
   if (statusMatch) return statusMatch[1];
+  if (ETHERSCAN_FREE_PLAN_LIMIT_RE.test(text)) return 'FREE_PLAN_LIMIT';
+  if (EXPLORER_V1_DEPRECATED_RE.test(text)) return 'DEPRECATED_V1';
   if (text.includes('JSON이 아닌 응답')) return 'NON_JSON';
   if (text.includes('Failed to fetch') || text.includes('NetworkError')) return 'NETWORK';
   return 'UNKNOWN';
@@ -1232,20 +1274,13 @@ async function fetchEvmWallet(address, chainId, rpcUrl, geckoId, symbol) {
 }
 
 async function fetchExplorerTokenBalances(chainId, address) {
-  const v2Query = new URLSearchParams({
-    chainid: String(chainId),
+  const candidates = buildExplorerCandidates(chainId, {
     module: 'account',
     action: 'addresstokenbalance',
     address,
     page: '1',
     offset: '200',
   });
-
-  if (ETHERSCAN_API_KEY) {
-    v2Query.set('apikey', ETHERSCAN_API_KEY);
-  }
-
-  const candidates = [`${ETHERSCAN_V2_ENDPOINT}?${v2Query.toString()}`];
 
   let rows = [];
   let lastError = null;
@@ -1259,6 +1294,9 @@ async function fetchExplorerTokenBalances(chainId, address) {
         break;
       }
     } catch (error) {
+      if (isExplorerV1DeprecatedError(error)) {
+        continue;
+      }
       if (isEtherscanFreePlanLimitError(error)) {
         isPlanLimited = true;
         continue;
@@ -1367,9 +1405,8 @@ async function fetchEvmTokenBalancesFromTransfers(chainId, address) {
   const maxPages = 20;
   const rows = [];
 
-  const makeV2Url = (page) => {
-    const q = new URLSearchParams({
-      chainid: String(chainId),
+  const makeCandidateUrls = (page) =>
+    buildExplorerCandidates(chainId, {
       module: 'account',
       action: 'tokentx',
       address,
@@ -1379,17 +1416,20 @@ async function fetchEvmTokenBalancesFromTransfers(chainId, address) {
       offset: String(offset),
       sort: 'asc',
     });
-    if (ETHERSCAN_API_KEY) q.set('apikey', ETHERSCAN_API_KEY);
-    return `${ETHERSCAN_V2_ENDPOINT}?${q.toString()}`;
-  };
 
   for (let page = 1; page <= maxPages; page += 1) {
     let pageRows = [];
-    try {
-      const payload = await safeFetchJsonGetWithFallback(makeV2Url(page));
-      pageRows = parseExplorerRows(payload?.result);
-    } catch (error) {
-      pageRows = [];
+    const urls = makeCandidateUrls(page);
+    for (const url of urls) {
+      try {
+        const payload = await safeFetchJsonGetWithFallback(url);
+        pageRows = parseExplorerRows(payload?.result);
+        if (pageRows.length) break;
+      } catch (error) {
+        if (isExplorerV1DeprecatedError(error) || isEtherscanFreePlanLimitError(error)) {
+          continue;
+        }
+      }
     }
 
     if (!pageRows.length) break;
