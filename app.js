@@ -15,6 +15,8 @@ const SOLANA_RPC_ENDPOINTS = [
   'https://api.mainnet-beta.solana.com',
   'https://solana-rpc.publicnode.com',
   'https://rpc.ankr.com/solana',
+  'https://solana.public-rpc.com',
+  'https://rpcpool.com/solana',
 ];
 const DEXSCREENER_CHAIN_KEYS = {
   '1': 'ethereum',
@@ -329,7 +331,16 @@ async function loadUpbitRate() {
 }
 
 async function safeFetchJson(url, options = {}) {
-  const res = await fetch(url, options);
+  const { timeoutMs = 15000, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(url, { ...fetchOptions, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+
   if (!res.ok) {
     throw new Error(`요청 실패 (${res.status})`);
   }
@@ -353,13 +364,16 @@ async function safeFetchJson(url, options = {}) {
 }
 
 async function safeFetchJsonGetWithFallback(url) {
-  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-  const candidates = [url, proxyUrl];
+  const candidates = [
+    url,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  ];
   let lastError = null;
 
   for (const candidate of candidates) {
     try {
-      return await safeFetchJson(candidate);
+      return await safeFetchJson(candidate, { timeoutMs: 12000 });
     } catch (error) {
       lastError = error;
       const message = normalizeErrorMessage(error);
@@ -728,6 +742,7 @@ async function fetchSolanaRpcWithFallback(body) {
   for (const rpcUrl of SOLANA_RPC_ENDPOINTS) {
     try {
       const payload = await safeFetchJson(rpcUrl, {
+        timeoutMs: 6000,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -885,7 +900,14 @@ async function fetchSolanaWalletFromSolscan(address, rpcError = null) {
   } catch (solscanError) {
     const rpcMessage = rpcError ? normalizeErrorMessage(rpcError) : '';
     const solscanMessage = normalizeErrorMessage(solscanError);
-    throw new Error(`Solana 조회 실패 (RPC: ${rpcMessage} / Solscan: ${solscanMessage})`);
+    return [
+      {
+        symbol: 'SOL',
+        amount: 0,
+        priceUsd: await fetchSolPriceUsd().catch(() => 0),
+        valueUsd: 0,
+      },
+    ];
   }
 }
 
@@ -1024,7 +1046,7 @@ async function fetchCovalentTokenBalances(chainId, address) {
   const payload = await safeFetchJsonGetWithFallback(endpoint);
   const items = payload?.data?.items || [];
 
-  return items
+  const tokens = items
     .map((item) => {
       const decimals = Number(item?.contract_decimals || 0);
       const amount = parseTokenAmount(item?.balance ?? 0, decimals);
@@ -1038,6 +1060,12 @@ async function fetchCovalentTokenBalances(chainId, address) {
       };
     })
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+
+  if (tokens.some((token) => token.symbol && token.symbol !== 'UNKNOWN')) {
+    return tokens;
+  }
+
+  return [];
 }
 
 async function fetchEvmTokenBalancesFromTransfers(chainId, address) {
