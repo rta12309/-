@@ -111,6 +111,19 @@
       throw new Error("since 형식 오류: YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM(:SS)");
     }
 
+
+    async function safeFetchJson(url, options) {
+      let res;
+      try {
+        res = await fetch(url, options);
+      } catch (e) {
+        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) explainFetchFailure(`safeFetchJson(${url})`);
+        throw e;
+      }
+      if (!res.ok) throw new Error(`http ${res.status}: ${url}`);
+      return await res.json();
+    }
+
     async function scanCall(chain, apiKey, params) {
       const url = new URL(SCAN_CONFIG[chain].apiBase);
       const payload = { ...params };
@@ -292,7 +305,72 @@
       URL.revokeObjectURL(a.href);
     }
 
+
+    async function fetchEvmNativeWallet(address, rpcUrl, geckoId, symbol) {
+      const [rpcPayload, pricePayload] = await Promise.all([
+        safeFetchJson(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_getBalance', params: [address, 'latest'], id: 1 }),
+        }),
+        safeFetchJson(`https://api.coingecko.com/api/v3/simple/price?ids=${geckoId}&vs_currencies=usd`),
+      ]);
+
+      const weiHex = rpcPayload?.result;
+      if (!weiHex || typeof weiHex !== 'string') throw new Error('RPC 잔액 조회 실패 (native)');
+      const amount = Number(BigInt(weiHex)) / 1e18;
+      const priceUsd = Number(pricePayload?.[geckoId]?.usd || 0);
+
+      return [{ symbol, tokenAddress: 'native', amount, priceUsd, valueUsd: amount * priceUsd }];
+    }
+
+    async function fetchEthereumWalletFromEthplorer(address) {
+      const data = await safeFetchJson(`https://api.ethplorer.io/getAddressInfo/${encodeURIComponent(address)}?apiKey=freekey`);
+      const tokens = data.tokens || [];
+      return tokens
+        .map(({ tokenInfo, balance }) => {
+          const decimals = Number(tokenInfo?.decimals || 0);
+          const amount = Number(balance || 0) / 10 ** decimals;
+          const priceUsd = Number(tokenInfo?.price?.rate || 0);
+          return {
+            symbol: tokenInfo?.symbol || tokenInfo?.name || 'UNKNOWN',
+            tokenAddress: String(tokenInfo?.address || '').toLowerCase(),
+            amount,
+            priceUsd,
+            valueUsd: amount * priceUsd,
+          };
+        })
+        .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+    }
+
+    async function fetchEthereumWallet(address) {
+      const [ethplorerResult, nativeResult] = await Promise.allSettled([
+        fetchEthereumWalletFromEthplorer(address),
+        fetchEvmNativeWallet(address, 'https://cloudflare-eth.com', 'ethereum', 'ETH'),
+      ]);
+
+      const ethplorerTokens = ethplorerResult.status === 'fulfilled' ? ethplorerResult.value : [];
+      const nativeTokens = nativeResult.status === 'fulfilled' ? nativeResult.value : [];
+
+      const byKey = new Map();
+      [...nativeTokens, ...ethplorerTokens].forEach((token) => {
+        const key = `${token.symbol}|${Number(token.amount).toFixed(8)}|${token.tokenAddress || ''}`;
+        if (!byKey.has(key)) byKey.set(key, token);
+      });
+
+      const merged = [...byKey.values()].filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+      if (!merged.length && ethplorerResult.status === 'rejected' && nativeResult.status === 'rejected') {
+        throw new Error('Ethereum 조회 실패: API 응답을 확인해 주세요.');
+      }
+
+      return {
+        tokens: merged,
+        warning: ethplorerResult.status === 'rejected' ? `Ethplorer 조회 실패: ${String(ethplorerResult.reason?.message || ethplorerResult.reason)}` : '',
+      };
+    }
+
     async function resolveTokenAndPrice(chain, ticker, inputTokenAddress) {
+
       const tokenAddress = inputTokenAddress || await resolveTokenAddress(chain, ticker);
       const price = await getTokenPrice(chain, tokenAddress);
       return { tokenAddress, price };
@@ -321,22 +399,37 @@
         const { tokenAddress, price } = await resolveTokenAndPrice(chain, ticker, inputTokenAddress);
         const decimals = await getTokenDecimals(chain, apiKey, tokenAddress);
 
-        const rawBal = await scanCall(chain, apiKey, { module: 'account', action: 'tokenbalance', contractaddress: tokenAddress, address: target, tag: 'latest' });
-        let tokenAmount = rawToDecimalAmount(rawBal, decimals);
+        let tokenAmount = NaN;
+        let usdValue = NaN;
+
+        if (chain === 'ethereum') {
+          try {
+            const ethWallet = await fetchEthereumWallet(target);
+            if (ethWallet.warning) log(`[WARN] ${ethWallet.warning}`);
+            const matched = ethWallet.tokens.find((t) => String(t.tokenAddress || '').toLowerCase() === tokenAddress.toLowerCase());
+            if (matched) {
+              tokenAmount = Number(matched.amount);
+              usdValue = Number(matched.valueUsd);
+            }
+          } catch (e) {
+            log(`[WARN] Ethereum wallet 병합 조회 실패, 기본 tokenbalance 방식으로 재시도: ${String(e.message || e)}`);
+          }
+        }
+
+        if (!Number.isFinite(tokenAmount)) {
+          const rawBal = await scanCall(chain, apiKey, { module: 'account', action: 'tokenbalance', contractaddress: tokenAddress, address: target, tag: 'latest' });
+          tokenAmount = rawToDecimalAmount(rawBal, decimals);
+          usdValue = Number.isFinite(tokenAmount) ? tokenAmount * price : NaN;
+        }
 
         if (!Number.isFinite(tokenAmount)) {
           log('[WARN] tokenbalance 값이 숫자로 해석되지 않아 holder 목록에서 대상 지갑 수량 재시도합니다.');
           const holderQty = await findHolderQuantityForAddress(chain, apiKey, tokenAddress, target, 20);
           if (holderQty !== null) {
-            if (holderQty.includes('.')) {
-              tokenAmount = Number(holderQty);
-            } else {
-              tokenAmount = rawToDecimalAmount(holderQty, decimals);
-            }
+            tokenAmount = holderQty.includes('.') ? Number(holderQty) : rawToDecimalAmount(holderQty, decimals);
+            usdValue = Number.isFinite(tokenAmount) ? tokenAmount * price : NaN;
           }
         }
-
-        const usdValue = Number.isFinite(tokenAmount) ? tokenAmount * price : NaN;
 
         let usdPass = true;
         if (settings.useUsdFilter) {
