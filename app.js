@@ -121,7 +121,6 @@ let usdtKrwRate = 0;
 let elements = null;
 let initialized = false;
 let autoAnalyzeTimer = null;
-let solanaTickerMapPromise = null;
 
 
 function init() {
@@ -335,7 +334,14 @@ async function safeFetchJson(url, options = {}) {
     throw new Error(`요청 실패 (${res.status})`);
   }
 
-  const payload = await res.json();
+  const text = await res.text();
+  let payload;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch (error) {
+    throw new Error('API가 JSON이 아닌 응답을 반환했습니다. (HTML/CAPTCHA 가능)');
+  }
+
   if (payload && payload.status === '0') {
     const message = String(payload.result || payload.message || '알 수 없는 API 오류');
     if (!/No\s*records/i.test(message)) {
@@ -347,16 +353,28 @@ async function safeFetchJson(url, options = {}) {
 }
 
 async function safeFetchJsonGetWithFallback(url) {
-  try {
-    return await safeFetchJson(url);
-  } catch (error) {
-    const message = normalizeErrorMessage(error);
-    const canProxy = message.includes('요청 실패 (403)') || message.includes('네트워크/CORS');
-    if (!canProxy) throw error;
+  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+  const candidates = [url, proxyUrl];
+  let lastError = null;
 
-    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-    return safeFetchJson(proxyUrl);
+  for (const candidate of candidates) {
+    try {
+      return await safeFetchJson(candidate);
+    } catch (error) {
+      lastError = error;
+      const message = normalizeErrorMessage(error);
+      const retryable =
+        message.includes('요청 실패 (403)') ||
+        message.includes('요청 실패 (429)') ||
+        message.includes('네트워크/CORS') ||
+        message.includes('JSON이 아닌 응답');
+      if (!retryable && candidate === url) {
+        throw error;
+      }
+    }
   }
+
+  throw lastError || new Error('외부 API 조회 실패');
 }
 
 
@@ -448,6 +466,9 @@ function normalizeErrorMessage(error) {
   }
   if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
     return '외부 API 네트워크/CORS 제한으로 조회에 실패했습니다. 잠시 후 다시 시도하거나 다른 체인으로 확인해 주세요.';
+  }
+  if (message.includes('JSON이 아닌 응답')) {
+    return '외부 API가 HTML/CAPTCHA를 반환해 조회에 실패했습니다. 잠시 후 재시도해 주세요.';
   }
   return message;
 }
@@ -575,14 +596,6 @@ async function fetchEthereumWalletFromEthplorer(address) {
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
 }
 
-function parseSolanaTokenList(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (payload && Array.isArray(payload.tokens)) return payload.tokens;
-  if (payload && Array.isArray(payload.data)) return payload.data;
-  return [];
-}
-
-
 async function fetchDexScreenerTokenMeta(addresses, chainKey) {
   const byAddress = new Map();
   const unique = [...new Set(addresses.filter((address) => typeof address === 'string' && address))];
@@ -694,90 +707,19 @@ async function fetchSolscanTokenMeta(address) {
   return metaByMint;
 }
 
-async function fetchSolanaMintPrices(mints) {
+async function fetchSolanaMintPricesFromDexscreener(mints) {
   const prices = {};
-  if (!mints.length) return prices;
-
   const uniqueMints = [...new Set(mints.filter(Boolean))];
+  if (!uniqueMints.length) return prices;
 
-  const chunkSize = 50;
-  for (let i = 0; i < uniqueMints.length; i += chunkSize) {
-    const chunk = uniqueMints.slice(i, i + chunkSize);
-    const ids = encodeURIComponent(chunk.join(','));
-
-    try {
-      const v6 = await safeFetchJsonGetWithFallback(`https://price.jup.ag/v6/price?ids=${ids}`);
-      const data = v6?.data || {};
-      Object.entries(data).forEach(([mint, row]) => {
-        const price = Number(row?.price || 0);
-        if (price > 0) prices[mint] = price;
-      });
-    } catch (error) {
-      // try next source
-    }
-
-    const unresolved = chunk.filter((mint) => !prices[mint]);
-    if (!unresolved.length) continue;
-
-    try {
-      const v4 = await safeFetchJsonGetWithFallback(
-        `https://price.jup.ag/v4/price?ids=${encodeURIComponent(unresolved.join(','))}`
-      );
-      const data = v4?.data || {};
-      Object.entries(data).forEach(([mint, row]) => {
-        const price = Number(row?.price || 0);
-        if (price > 0) prices[mint] = price;
-      });
-    } catch (error) {
-      // keep unresolved
-    }
-  }
-
-  const unresolvedMints = uniqueMints.filter((mint) => !prices[mint]);
-  if (unresolvedMints.length) {
-    const dexMap = await fetchDexScreenerTokenMeta(unresolvedMints, DEXSCREENER_CHAIN_KEYS.solana);
-    unresolvedMints.forEach((mint) => {
-      const row = dexMap.get(String(mint).toLowerCase());
-      const price = Number(row?.priceUsd || 0);
-      if (price > 0) prices[mint] = price;
-    });
-  }
+  const dexMap = await fetchDexScreenerTokenMeta(uniqueMints, DEXSCREENER_CHAIN_KEYS.solana);
+  uniqueMints.forEach((mint) => {
+    const row = dexMap.get(String(mint).toLowerCase());
+    const price = Number(row?.priceUsd || 0);
+    if (price > 0) prices[mint] = price;
+  });
 
   return prices;
-}
-
-async function getSolanaTickerMap() {
-  if (!solanaTickerMapPromise) {
-    solanaTickerMapPromise = (async () => {
-      const urls = [
-        'https://token.jup.ag/all',
-        'https://cache.jup.ag/tokens',
-        'https://token.jup.ag/strict',
-      ];
-
-      const map = new Map();
-      for (const url of urls) {
-        try {
-          const payload = await safeFetchJsonGetWithFallback(url);
-          const tokens = parseSolanaTokenList(payload);
-          tokens.forEach((token) => {
-            const mint = token?.address;
-            const symbol = token?.symbol;
-            if (typeof mint === 'string' && mint && typeof symbol === 'string' && symbol) {
-              if (!map.has(mint)) map.set(mint, symbol);
-            }
-          });
-          if (map.size > 1000) break;
-        } catch (error) {
-          // try next source
-        }
-      }
-
-      return map;
-    })().catch(() => new Map());
-  }
-
-  return solanaTickerMapPromise;
 }
 
 async function fetchSolanaRpcWithFallback(body) {
@@ -842,7 +784,7 @@ async function fetchSolPriceUsd() {
 
 async function fetchSolanaWallet(address) {
   try {
-    const [solBalancePayload, tokenAccountsPayload] = await Promise.all([
+    const [solBalancePayload, tokenAccountsPayload, solscanMetaByMint] = await Promise.all([
       fetchSolanaRpcWithFallback({ jsonrpc: '2.0', id: 1, method: 'getBalance', params: [address] }),
       fetchSolanaRpcWithFallback({
         jsonrpc: '2.0',
@@ -850,6 +792,7 @@ async function fetchSolanaWallet(address) {
         method: 'getTokenAccountsByOwner',
         params: [address, { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }, { encoding: 'jsonParsed' }],
       }),
+      fetchSolscanTokenMeta(address),
     ]);
 
     const tokenAccounts = tokenAccountsPayload?.result?.value || [];
@@ -859,10 +802,9 @@ async function fetchSolanaWallet(address) {
         .filter((mint) => typeof mint === 'string' && mint.length > 0)
     )];
 
-    const [tickerMap, mintPrices, dexMeta] = await Promise.all([
-      getSolanaTickerMap(),
-      fetchSolanaMintPrices(mints),
+    const [dexMeta, dexPrices] = await Promise.all([
       fetchDexScreenerTokenMeta(mints, DEXSCREENER_CHAIN_KEYS.solana),
+      fetchSolanaMintPricesFromDexscreener(mints),
     ]);
 
     const solAmount = Number(solBalancePayload?.result?.value || 0) / 1_000_000_000;
@@ -875,10 +817,10 @@ async function fetchSolanaWallet(address) {
         const mint = String(info?.mint || '').trim();
         const dexRow = dexMeta.get(mint.toLowerCase());
         const solscanMeta = solscanMetaByMint.get(mint);
-        const priceUsd = Number(mintPrices?.[mint] || solscanMeta?.priceUsd || dexRow?.priceUsd || 0);
+        const priceUsd = Number(solscanMeta?.priceUsd || dexPrices?.[mint] || dexRow?.priceUsd || 0);
 
         return {
-          symbol: solscanMeta?.symbol || dexRow?.symbol || tickerMap.get(mint) || mint.slice(0, 4) + '...' + mint.slice(-4),
+          symbol: solscanMeta?.symbol || dexRow?.symbol || (mint ? `${mint.slice(0, 4)}...${mint.slice(-4)}` : 'UNKNOWN'),
           amount,
           priceUsd,
           valueUsd: amount * priceUsd,
@@ -912,10 +854,9 @@ async function fetchSolanaWalletFromSolscan(address, rpcError = null) {
 
     const tokenData = payload?.data?.tokenAccounts || [];
     const mints = [...new Set(tokenData.map((token) => token.tokenAddress || token.mint).filter(Boolean))];
-    const [tickerMap, mintPrices, dexMeta, solscanMetaByMint] = await Promise.all([
-      getSolanaTickerMap(),
-      fetchSolanaMintPrices(mints),
+    const [dexMeta, dexPrices, solscanMetaByMint] = await Promise.all([
       fetchDexScreenerTokenMeta(mints, DEXSCREENER_CHAIN_KEYS.solana),
+      fetchSolanaMintPricesFromDexscreener(mints),
       fetchSolscanTokenMeta(address),
     ]);
 
@@ -928,9 +869,9 @@ async function fetchSolanaWalletFromSolscan(address, rpcError = null) {
         const dexRow = dexMeta.get(mint.toLowerCase());
         const solscanMeta = solscanMetaByMint.get(mint);
         const symbol =
-          token.symbol || token.tokenSymbol || solscanMeta?.symbol || dexRow?.symbol || tickerMap.get(mint) || token.tokenName || (mint ? `${mint.slice(0, 4)}...${mint.slice(-4)}` : 'UNKNOWN');
+          token.symbol || token.tokenSymbol || solscanMeta?.symbol || dexRow?.symbol || token.tokenName || (mint ? `${mint.slice(0, 4)}...${mint.slice(-4)}` : 'UNKNOWN');
         const priceUsd = Number(
-          mintPrices?.[mint] ?? token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? solscanMeta?.priceUsd ?? dexRow?.priceUsd ?? 0
+          token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? solscanMeta?.priceUsd ?? dexPrices?.[mint] ?? dexRow?.priceUsd ?? 0
         );
 
         return {
@@ -1019,9 +960,9 @@ async function fetchExplorerTokenBalances(chainId, address) {
     if (covalentFallback.length) return covalentFallback;
   }
 
-  if (!rows.length && chainId === '56') {
-    const bscFallback = await fetchBscTokenBalancesFromTransfers(address).catch(() => []);
-    if (bscFallback.length) return bscFallback;
+  if (!rows.length) {
+    const transferFallback = await fetchEvmTokenBalancesFromTransfers(chainId, address).catch(() => []);
+    if (transferFallback.length) return transferFallback;
   }
 
   if (!rows.length && lastError) {
@@ -1099,14 +1040,14 @@ async function fetchCovalentTokenBalances(chainId, address) {
     .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
 }
 
-async function fetchBscTokenBalancesFromTransfers(address) {
+async function fetchEvmTokenBalancesFromTransfers(chainId, address) {
   const offset = 1000;
   const maxPages = 20;
   const rows = [];
 
   const makeV2Url = (page) => {
     const q = new URLSearchParams({
-      chainid: '56',
+      chainid: String(chainId),
       module: 'account',
       action: 'tokentx',
       address,
@@ -1121,9 +1062,11 @@ async function fetchBscTokenBalancesFromTransfers(address) {
   };
 
   const makeV1Url = (page) =>
-    `${EXPLORER_V1_ENDPOINTS['56']}?module=account&action=tokentx&address=${encodeURIComponent(
-      address
-    )}&startblock=0&endblock=99999999&page=${page}&offset=${offset}&sort=asc`;
+    EXPLORER_V1_ENDPOINTS[String(chainId)]
+      ? `${EXPLORER_V1_ENDPOINTS[String(chainId)]}?module=account&action=tokentx&address=${encodeURIComponent(
+          address
+        )}&startblock=0&endblock=99999999&page=${page}&offset=${offset}&sort=asc`
+      : '';
 
   for (let page = 1; page <= maxPages; page += 1) {
     let pageRows = [];
@@ -1132,6 +1075,7 @@ async function fetchBscTokenBalancesFromTransfers(address) {
       pageRows = parseExplorerRows(payload?.result);
     } catch (error) {
       try {
+        if (!makeV1Url(page)) throw error;
         const payload = await safeFetchJsonGetWithFallback(makeV1Url(page));
         pageRows = parseExplorerRows(payload?.result);
       } catch (error2) {
@@ -1151,8 +1095,7 @@ async function fetchBscTokenBalancesFromTransfers(address) {
     if (!contract) return;
 
     const decimals = Number(tx.tokenDecimal || 0);
-    const raw = Number(tx.value || 0);
-    const amount = decimals > 0 ? raw / 10 ** decimals : raw;
+    const amount = parseTokenAmount(tx.value || 0, decimals);
     if (!Number.isFinite(amount) || amount <= 0) return;
 
     const from = String(tx.from || '').toLowerCase();
