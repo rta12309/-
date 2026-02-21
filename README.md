@@ -1,21 +1,39 @@
-# Solscan 지갑 토큰 보유량 조회기
+# Solscan 지갑 토큰 보유량 조회기 (Web)
 
-지갑 주소를 입력한 뒤, 그 지갑이 보유한 토큰 목록에서 **토큰 티커(symbol)** 를 선택(또는 직접 입력)해서 특정 토큰 보유량을 확인하는 CLI 프로그램입니다.
+요청하신 대로 **웹 페이지 형태**로 사용할 수 있게 만들었습니다.
+
+- 지갑 주소를 입력하고
+- 해당 지갑의 토큰 목록을 불러온 뒤
+- 토큰을 **드롭다운에서 선택**하거나 **티커/토큰주소를 직접 입력**해서
+- 보유량을 확인할 수 있습니다.
 
 ## 실행 방법
 
 ```bash
-python3 solscan_wallet_token_checker.py
+python3 web_wallet_token_checker.py
+# 또는 포트 변경
+# python3 web_wallet_token_checker.py --port 9000
 ```
 
-## 동작 방식
+실행 후 브라우저에서 아래 주소를 여세요.
 
-1. Solana 지갑 주소 입력
-2. Solscan 공개 API(`public-api.solscan.io`)에서 토큰 목록 조회
-3. 번호 / 티커(symbol) / 토큰 주소 중 하나로 조회 대상 토큰 선택
-4. 해당 토큰의 보유량(raw, decimal 반영값) 출력
+- `http://localhost:8765`
 
-## 참고
+## 기능
 
-- API 응답 형식이 변경되거나 Solscan 측 제한이 있는 경우 조회가 실패할 수 있습니다.
-- 같은 티커를 가진 토큰이 여러 개일 수 있으므로, 필요 시 토큰 주소로 정확히 지정하세요.
+- Solscan API를 우선으로 조회 시도
+  - `public-api.solscan.io/account/tokens`
+  - `api-v2.solscan.io/v2/account/token-accounts`
+- 각 시도 결과(성공/실패 및 원인)를 화면에 로그로 표시
+- 토큰 목록 표 출력 + 선택/직접입력 조회
+
+## 403 오류 관련
+
+현재 일부 환경(프록시/방화벽/네트워크 정책)에서는 Solscan 도메인 접속 자체가 `403`으로 차단될 수 있습니다.
+이 경우 앱 내부에서 여러 Solscan 엔드포인트를 순차 시도하고, 실패 원인을 그대로 보여줍니다.
+
+로컬 PC에서 사용 시에는 아래를 확인하면 해결 가능성이 큽니다.
+
+1. 회사/기관 프록시에서 Solscan 도메인 허용
+2. VPN/보안 SW가 HTTPS 터널을 차단하지 않는지 확인
+3. 필요한 경우 Solscan Pro API 키를 사용하는 경로로 확장
