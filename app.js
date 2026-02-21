@@ -2,15 +2,6 @@ const MAX_WALLETS_PER_GROUP = 10;
 const MIN_AUTO_REFRESH_SECONDS = 5;
 const ETHERSCAN_V2_ENDPOINT = 'https://api.etherscan.io/v2/api';
 const ETHERSCAN_API_KEY = '';
-const EXPLORER_V1_ENDPOINTS = {
-  '1': 'https://api.etherscan.io/api',
-  '56': 'https://api.bscscan.com/api',
-  '137': 'https://api.polygonscan.com/api',
-  '42161': 'https://api.arbiscan.io/api',
-  '10': 'https://api-optimistic.etherscan.io/api',
-  '43114': 'https://api.snowtrace.io/api',
-  '8453': 'https://api.basescan.org/api',
-};
 const SOLANA_RPC_ENDPOINTS = [
   'https://api.mainnet-beta.solana.com',
   'https://solana-rpc.publicnode.com',
@@ -966,13 +957,6 @@ async function fetchExplorerTokenBalances(chainId, address) {
   }
 
   const candidates = [`${ETHERSCAN_V2_ENDPOINT}?${v2Query.toString()}`];
-  if (EXPLORER_V1_ENDPOINTS[chainId]) {
-    candidates.push(
-      `${EXPLORER_V1_ENDPOINTS[chainId]}?module=account&action=addresstokenbalance&address=${encodeURIComponent(
-        address
-      )}&page=1&offset=200`
-    );
-  }
 
   let rows = [];
   let lastError = null;
@@ -1101,26 +1085,13 @@ async function fetchEvmTokenBalancesFromTransfers(chainId, address) {
     return `${ETHERSCAN_V2_ENDPOINT}?${q.toString()}`;
   };
 
-  const makeV1Url = (page) =>
-    EXPLORER_V1_ENDPOINTS[String(chainId)]
-      ? `${EXPLORER_V1_ENDPOINTS[String(chainId)]}?module=account&action=tokentx&address=${encodeURIComponent(
-          address
-        )}&startblock=0&endblock=99999999&page=${page}&offset=${offset}&sort=asc`
-      : '';
-
   for (let page = 1; page <= maxPages; page += 1) {
     let pageRows = [];
     try {
       const payload = await safeFetchJsonGetWithFallback(makeV2Url(page));
       pageRows = parseExplorerRows(payload?.result);
     } catch (error) {
-      try {
-        if (!makeV1Url(page)) throw error;
-        const payload = await safeFetchJsonGetWithFallback(makeV1Url(page));
-        pageRows = parseExplorerRows(payload?.result);
-      } catch (error2) {
-        pageRows = [];
-      }
+      pageRows = [];
     }
 
     if (!pageRows.length) break;
