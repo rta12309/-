@@ -179,3 +179,19 @@ button.primary {
   margin-left: 6px;
   padding: 6px;
 }
+
+
+.auto-panel {
+  flex-wrap: wrap;
+}
+
+.ticker-filter-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#ticker-filter-input {
+  width: 220px;
+  padding: 6px;
+}

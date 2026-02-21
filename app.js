@@ -125,6 +125,8 @@ function init() {
     walletTemplate: document.getElementById('wallet-template'),
     autoRefreshToggle: document.getElementById('auto-refresh-toggle'),
     autoRefreshSeconds: document.getElementById('auto-refresh-seconds'),
+    tickerFilterToggle: document.getElementById('ticker-filter-toggle'),
+    tickerFilterInput: document.getElementById('ticker-filter-input'),
   };
 
   if (!Object.values(elements).every(Boolean)) {
@@ -139,7 +141,13 @@ function init() {
   elements.analyzeAllBtn.addEventListener('click', () => analyzeAllGroups(true));
   elements.autoRefreshToggle.addEventListener('change', updateAutoAnalyze);
   elements.autoRefreshSeconds.addEventListener('change', updateAutoAnalyze);
+  elements.tickerFilterToggle.addEventListener('change', updateTickerFilterState);
 
+  elements.tickerFilterInput.addEventListener('input', () => {
+    if (!elements.tickerFilterToggle.checked) return;
+  });
+
+  updateTickerFilterState();
   createGroup('기본 그룹');
   loadUpbitRate();
 }
@@ -165,6 +173,32 @@ function updateAutoAnalyze() {
 
   analyzeAllGroups(false);
   autoAnalyzeTimer = setInterval(() => analyzeAllGroups(false), seconds * 1000);
+}
+
+function updateTickerFilterState() {
+  const enabled = Boolean(elements.tickerFilterToggle.checked);
+  elements.tickerFilterInput.disabled = !enabled;
+  if (!enabled) {
+    elements.tickerFilterInput.value = '';
+  }
+}
+
+function getTickerFilterSet() {
+  if (!elements.tickerFilterToggle.checked) {
+    return null;
+  }
+
+  const values = String(elements.tickerFilterInput.value || '')
+    .split(/[\s,]+/)
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean);
+
+  return values.length ? new Set(values) : null;
+}
+
+function applyTickerFilter(tokens, tickerSet) {
+  if (!tickerSet) return tokens;
+  return tokens.filter((token) => tickerSet.has(String(token.symbol || '').toUpperCase()));
 }
 
 function createGroup(defaultName = '') {
@@ -343,6 +377,7 @@ async function analyzeGroup(groupNode) {
 
   let groupTotalUsdt = 0;
   const rows = [...groupNode.querySelectorAll('.wallet-row')];
+  const tickerFilterSet = getTickerFilterSet();
 
   for (const row of rows) {
     const sourceConfig = getSourceConfig(row.querySelector('.source-select').value);
@@ -360,9 +395,10 @@ async function analyzeGroup(groupNode) {
       }
 
       const tokenData = await sourceConfig.fetcher(address);
-      const walletUsdt = tokenData.reduce((sum, token) => sum + token.valueUsd, 0);
+      const filteredTokens = applyTickerFilter(tokenData, tickerFilterSet);
+      const walletUsdt = filteredTokens.reduce((sum, token) => sum + token.valueUsd, 0);
       groupTotalUsdt += walletUsdt;
-      renderWalletResult(resultWrap, tokenData, walletUsdt, sourceConfig.label, address);
+      renderWalletResult(resultWrap, filteredTokens, walletUsdt, sourceConfig.label, address, tickerFilterSet);
     } catch (error) {
       renderWalletError(resultWrap, sourceConfig.label, address, normalizeErrorMessage(error));
     }
@@ -390,12 +426,14 @@ function normalizeErrorMessage(error) {
   return message;
 }
 
-function renderWalletResult(container, tokens, walletUsdt, sourceLabel, address) {
+function renderWalletResult(container, tokens, walletUsdt, sourceLabel, address, tickerFilterSet = null) {
   const header = createWalletHeader(sourceLabel, address);
   if (!tokens.length) {
     const empty = document.createElement('p');
     empty.className = 'empty-msg';
-    empty.textContent = '토큰 데이터가 없거나 조회에 실패했습니다.';
+    empty.textContent = tickerFilterSet
+      ? '필터 조건에 맞는 토큰이 없습니다.'
+      : '토큰 데이터가 없거나 조회에 실패했습니다.';
     container.replaceChildren(header, empty);
     return;
   }
