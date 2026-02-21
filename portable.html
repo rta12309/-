@@ -617,6 +617,20 @@ async function safeFetchJson(url, options = {}) {
   return payload;
 }
 
+async function safeFetchJsonGetWithFallback(url) {
+  try {
+    return await safeFetchJson(url);
+  } catch (error) {
+    const message = normalizeErrorMessage(error);
+    const canProxy = message.includes('요청 실패 (403)') || message.includes('네트워크/CORS');
+    if (!canProxy) throw error;
+
+    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+    return safeFetchJson(proxyUrl);
+  }
+}
+
+
 function parseUpbitPrice(payload) {
   if (!Array.isArray(payload) || !payload.length) {
     return 0;
@@ -834,7 +848,7 @@ async function fetchEthereumWalletFromEthplorer(address) {
 
 async function getSolanaTickerMap() {
   if (!solanaTickerMapPromise) {
-    solanaTickerMapPromise = safeFetchJson('https://token.jup.ag/all')
+    solanaTickerMapPromise = safeFetchJsonGetWithFallback('https://token.jup.ag/all')
       .then((tokens) => {
         const map = new Map();
         (Array.isArray(tokens) ? tokens : []).forEach((token) => {
@@ -876,6 +890,28 @@ async function fetchSolanaRpcWithFallback(body) {
   throw lastError || new Error('Solana RPC 조회 실패');
 }
 
+async function fetchSolPriceUsd() {
+  try {
+    const gecko = await safeFetchJsonGetWithFallback('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+    const geckoPrice = Number(gecko?.solana?.usd || 0);
+    if (geckoPrice > 0) return geckoPrice;
+  } catch (error) {
+    // try next source
+  }
+
+  try {
+    const jupiter = await safeFetchJsonGetWithFallback(
+      'https://price.jup.ag/v4/price?ids=So11111111111111111111111111111111111111112'
+    );
+    const jupiterPrice = Number(jupiter?.data?.So11111111111111111111111111111111111111112?.price || 0);
+    if (jupiterPrice > 0) return jupiterPrice;
+  } catch (error) {
+    // fallback failed
+  }
+
+  return 0;
+}
+
 async function fetchSolanaWallet(address) {
   try {
     const [solBalancePayload, tokenAccountsPayload] = await Promise.all([
@@ -899,7 +935,7 @@ async function fetchSolanaWallet(address) {
     const tickerMap = await getSolanaTickerMap();
     if (mints.length) {
       try {
-        const pricePayload = await safeFetchJson(
+        const pricePayload = await safeFetchJsonGetWithFallback(
           `https://price.jup.ag/v4/price?ids=${encodeURIComponent(mints.join(','))}`
         );
         mintPrices = pricePayload?.data || {};
@@ -910,10 +946,7 @@ async function fetchSolanaWallet(address) {
 
     const solAmount = Number(solBalancePayload?.result?.value || 0) / 1_000_000_000;
 
-    const [solPricePayload] = await Promise.all([
-      safeFetchJson('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'),
-    ]);
-    const solPriceUsd = Number(solPricePayload?.solana?.usd || 0);
+    const solPriceUsd = await fetchSolPriceUsd();
 
     const splTokens = tokenAccounts
       .map((item) => {
@@ -949,20 +982,39 @@ async function fetchSolanaWallet(address) {
 
 async function fetchSolanaWalletFromSolscan(address, rpcError = null) {
   try {
-    const payload = await safeFetchJson(
+    const payload = await safeFetchJsonGetWithFallback(
       `https://api-v2.solscan.io/v2/account/token-accounts?address=${encodeURIComponent(
         address
       )}&page=1&page_size=40&type=token`
     );
 
     const tokenData = payload?.data?.tokenAccounts || [];
+    const tickerMap = await getSolanaTickerMap();
+    const mints = [...new Set(tokenData.map((token) => token.tokenAddress || token.mint).filter(Boolean))];
+
+    let mintPrices = {};
+    if (mints.length) {
+      try {
+        const pricePayload = await safeFetchJsonGetWithFallback(
+          `https://price.jup.ag/v4/price?ids=${encodeURIComponent(mints.join(','))}`
+        );
+        mintPrices = pricePayload?.data || {};
+      } catch (error) {
+        mintPrices = {};
+      }
+    }
+
     return tokenData
       .map((token) => {
         const amount = Number(
           token.amount ?? token.balance ?? token.tokenAmount?.uiAmount ?? token.tokenAmount?.amount ?? 0
         );
-        const symbol = token.symbol || token.tokenSymbol || token.tokenName || token.tokenAddress || 'UNKNOWN';
-        const priceUsd = Number(token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? 0);
+        const mint = token.tokenAddress || token.mint || '';
+        const symbol =
+          token.symbol || token.tokenSymbol || tickerMap.get(mint) || token.tokenName || mint.slice(0, 4) + '...' + mint.slice(-4) || 'UNKNOWN';
+        const priceUsd = Number(
+          token.priceUsd ?? token.price_usdt ?? token.tokenPrice?.usd ?? mintPrices?.[mint]?.price ?? 0
+        );
 
         return {
           symbol,
