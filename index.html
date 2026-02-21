@@ -274,6 +274,81 @@
       return `0x${topic.slice(26)}`.toLowerCase();
     }
 
+    const PUBLIC_RPC = {
+      ethereum: 'https://cloudflare-eth.com',
+      bsc: 'https://bsc-dataseed.binance.org',
+      polygon: 'https://polygon-rpc.com',
+      arbitrum: 'https://arb1.arbitrum.io/rpc',
+      optimism: 'https://mainnet.optimism.io',
+    };
+
+    function toTopicAddress(address) {
+      const hex = String(address || '').toLowerCase().replace(/^0x/, '');
+      if (!/^[0-9a-f]{40}$/.test(hex)) return null;
+      return `0x${'0'.repeat(24)}${hex}`;
+    }
+
+    async function rpcCall(chain, method, params) {
+      const rpcUrl = PUBLIC_RPC[chain];
+      if (!rpcUrl) throw new Error(`RPC 미지원 체인: ${chain}`);
+      const payload = await safeFetchJson(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      });
+      if (payload?.error) throw new Error(`rpc ${method} error: ${payload.error?.message || 'unknown'}`);
+      return payload?.result;
+    }
+
+    async function getWalletTokenTxViaRpcLogs(chain, tokenAddress, address) {
+      const walletTopic = toTopicAddress(address);
+      if (!walletTopic) return [];
+      const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
+      // in/out 모두 조회
+      const [inLogs, outLogs] = await Promise.all([
+        rpcCall(chain, 'eth_getLogs', [{
+          fromBlock: '0x0', toBlock: 'latest', address: tokenAddress,
+          topics: [transferTopic, null, walletTopic],
+        }]),
+        rpcCall(chain, 'eth_getLogs', [{
+          fromBlock: '0x0', toBlock: 'latest', address: tokenAddress,
+          topics: [transferTopic, walletTopic],
+        }]),
+      ]);
+
+      const merged = [...(Array.isArray(inLogs) ? inLogs : []), ...(Array.isArray(outLogs) ? outLogs : [])];
+      if (!merged.length) return [];
+
+      const uniqueByKey = new Map();
+      for (const l of merged) {
+        const key = `${l.transactionHash || ''}-${l.logIndex || ''}`;
+        if (!uniqueByKey.has(key)) uniqueByKey.set(key, l);
+      }
+
+      const blockHexes = [...new Set([...uniqueByKey.values()].map((l) => l.blockNumber).filter(Boolean))];
+      const blockTs = new Map();
+      await Promise.all(blockHexes.map(async (bn) => {
+        try {
+          const block = await rpcCall(chain, 'eth_getBlockByNumber', [bn, false]);
+          const ts = Number.parseInt(block?.timestamp || '0x0', 16);
+          blockTs.set(String(bn).toLowerCase(), Number.isFinite(ts) ? ts : 0);
+        } catch {
+          blockTs.set(String(bn).toLowerCase(), 0);
+        }
+      }));
+
+      return [...uniqueByKey.values()]
+        .map((l) => ({
+          timeStamp: String(blockTs.get(String(l.blockNumber || '').toLowerCase()) || 0),
+          from: parseLogAddress(l.topics?.[1]) || '',
+          to: parseLogAddress(l.topics?.[2]) || '',
+          contractAddress: tokenAddress,
+        }))
+        .filter((t) => t.from || t.to)
+        .sort((a, b) => Number(a.timeStamp || 0) - Number(b.timeStamp || 0));
+    }
+
     async function getTransferRecipientsFallback(chain, apiKey, tokenAddress, decimals) {
       const latestHex = await scanCall(chain, apiKey, { module: 'proxy', action: 'eth_blockNumber' });
       const latest = parseInt(latestHex, 16);
@@ -335,6 +410,17 @@
         } catch (e) {
           log(`[WARN] ethplorer tx fallback 실패: ${String(e.message || e)}`);
         }
+      }
+
+      // 4) RPC log fallback (explorer 인덱싱 불안정 시 우회)
+      try {
+        const rpcTx = await getWalletTokenTxViaRpcLogs(chain, tokenAddress, address);
+        if (Array.isArray(rpcTx) && rpcTx.length) {
+          log(`[INFO] RPC 로그 fallback으로 tx ${rpcTx.length}건 복구`);
+          return rpcTx;
+        }
+      } catch (e) {
+        log(`[WARN] RPC 로그 fallback 실패: ${String(e.message || e)}`);
       }
 
       return [];
@@ -518,7 +604,7 @@
         const txs = await getWalletTokenTxWithFallback(chain, apiKey, tokenAddress, target);
         const behaviorOff = !settings.useSinceFirstTx && !settings.useInboundRatio && !settings.useUniqueSenders;
         const behavior = behaviorOff ? { pass: true, reason: '행동조건 OFF', detail: { txCountAfterSince: 0, inboundRatio: 0, uniqueSenders: 0 } } : passBehavior(txs, target, sinceTs, settings);
-        if (!behaviorOff && (!Array.isArray(txs) || !txs.length)) log('[WARN] 토큰 tx가 비어 explorer/ethplorer fallback까지 시도했지만 데이터를 찾지 못했습니다.');
+        if (!behaviorOff && (!Array.isArray(txs) || !txs.length)) log('[WARN] 토큰 tx가 비어 explorer/ethplorer/RPC fallback까지 시도했지만 데이터를 찾지 못했습니다.');
 
         const finalPass = usdPass && behavior.pass;
         log(`[INFO] target=${target}`);

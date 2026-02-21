@@ -21,6 +21,15 @@
 - 병합 조회 실패 또는 대상 토큰 미포함 시에만 `tokenbalance` 방식으로 재시도합니다.
 - 그래서 이전처럼 `balance=NaN, usd=NaN`으로 바로 탈락하는 케이스를 줄였습니다.
 
+
+## 토큰 트랜잭션 조회 방식 (강화)
+- 행동 조건 판정용 tx 조회는 아래 순서로 fallback합니다.
+  1. Explorer `tokentx(contractaddress + address)`
+  2. Explorer `tokentx(address)` 후 토큰 CA 필터
+  3. (Ethereum) Ethplorer address history
+  4. RPC `eth_getLogs` (Transfer topic) + `eth_getBlockByNumber` timestamp 복원
+- 따라서 Explorer 인덱싱이 비거나 제한될 때도 RPC 로그로 tx를 복구할 수 있습니다.
+
 ## Quantity 처리 방식
 - 별도의 `raw 체크` / `decimals` 수동 입력을 제거했습니다.
 - 홀더 Quantity 값에서 **소수점 5자리 이상이 보이면 decimal 수량으로 간주**해서 그대로 사용합니다.
