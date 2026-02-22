@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChainScan 조건 지갑 필터 (Web)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px; line-height: 1.5; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap: 12px; }
+    label { display: block; font-size: 13px; color: #444; margin-bottom: 4px; }
+    input, select { width: 100%; box-sizing: border-box; padding: 8px; }
+    button { padding: 10px 14px; margin-top: 14px; cursor: pointer; margin-right: 8px; }
+    .row { margin-bottom: 10px; }
+    #log { white-space: pre-wrap; background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; min-height: 120px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+    th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
+    th { background: #f6f6f6; }
+    .muted { color: #666; font-size: 13px; }
+    .help { color: #666; font-size: 12px; margin-top: 4px; }
+    .label-toggle { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .label-toggle .t { font-size: 12px; color: #333; display: inline-flex; align-items: center; gap: 6px; }
+    .label-toggle input[type='checkbox'] { width: auto; margin: 0; }
+  </style>
+</head>
+<body>
+  <h2>ChainScan 조건 지갑 필터 (웹 실행)</h2>
+  <p class="muted">설치 없이 브라우저에서 바로 실행됩니다.</p>
+
+  <div class="grid">
+    <div class="row"><label>체인</label><select id="chain"><option value="ethereum">ethereum</option><option value="bsc">bsc</option><option value="polygon">polygon</option><option value="arbitrum">arbitrum</option><option value="optimism">optimism</option></select></div>
+    <div class="row"><label>토큰 티커 (예: USDT)</label><input id="ticker" value="USDT" /></div>
+    <div class="row"><label>토큰 CA 주소(선택)</label><input id="tokenAddress" placeholder="0x... (비우면 티커로 자동 탐색)" /></div>
+    <div class="row"><label>특정 지갑 주소 체크(선택)</label><input id="targetWallet" placeholder="0x... 입력 시 단일 지갑 조건 체크 가능" /></div>
+
+    <div class="row">
+      <div class="label-toggle"><label style="margin:0">기준 날짜/시간 UTC</label><span class="t"><input type="checkbox" id="useSinceFirstTx" checked />적용</span></div>
+      <input id="since" type="datetime-local" value="2025-01-01T00:00" />
+      <div class="help">분 단위 기본값 사용 (위 토글 OFF시 첫 트랜잭션 시각 조건 미적용)</div>
+    </div>
+
+    <div class="row"><label>Scan API Key (선택)</label><input id="apiKey" placeholder="비워도 실행 가능" /><div class="help">키가 있으면 속도/한도 측면에서 유리</div></div>
+
+    <div class="row"><label>Quantity 자동 해석</label><div class="help">홀더 Quantity가 소수점 5자리 이상이면 그대로 사용, 아니면 decimals() 자동 조회 후 raw값으로 처리합니다.</div></div>
+
+    <div class="row">
+      <div class="label-toggle"><label style="margin:0">USD 최소값</label><span class="t"><input type="checkbox" id="useUsdFilter" checked />적용</span></div>
+      <input id="minUsd" type="number" value="300000" />
+      <label>USD 최대값</label><input id="maxUsd" type="number" value="30000000" />
+    </div>
+
+    <div class="row">
+      <div class="label-toggle"><label style="margin:0">입금 비율 임계치</label><span class="t"><input type="checkbox" id="useInboundRatio" checked />적용</span></div>
+      <input id="inboundRatio" type="number" step="0.01" value="0.8" />
+    </div>
+
+    <div class="row">
+      <div class="label-toggle"><label style="margin:0">최소 송신자 수</label><span class="t"><input type="checkbox" id="useUniqueSenders" checked />적용</span></div>
+      <input id="minSenders" type="number" value="3" />
+    </div>
+
+    <div class="row"><label>홀더 조회 페이지 수</label><input id="maxPages" type="number" value="10" /></div>
+  </div>
+
+  <button id="runBtn">스캔 실행</button>
+  <button id="checkBtn">특정 지갑 조건 체크</button>
+  <button id="downloadBtn" disabled>CSV 다운로드</button>
+
+  <h3>로그</h3><div id="log"></div>
+  <h3>결과</h3>
+  <table id="resultTable"><thead><tr><th>address</th><th>token_amount</th><th>usd_value</th><th>tx_count_after_since</th><th>inbound_ratio</th><th>unique_senders</th></tr></thead><tbody></tbody></table>
+
+  <script>
+    const SCAN_CONFIG = {
+      ethereum: { apiBase: "https://api.etherscan.io/api", cgPlatform: "ethereum" },
+      bsc: { apiBase: "https://api.bscscan.com/api", cgPlatform: "binance-smart-chain" },
+      polygon: { apiBase: "https://api.polygonscan.com/api", cgPlatform: "polygon-pos" },
+      arbitrum: { apiBase: "https://api.arbiscan.io/api", cgPlatform: "arbitrum-one" },
+      optimism: { apiBase: "https://api-optimistic.etherscan.io/api", cgPlatform: "optimistic-ethereum" },
+    };
+
+    let latestSignals = [];
+    const logEl = document.getElementById("log");
+    const tbody = document.querySelector("#resultTable tbody");
+    const runBtn = document.getElementById("runBtn");
+    const checkBtn = document.getElementById("checkBtn");
+    const downloadBtn = document.getElementById("downloadBtn");
+    const on = (id) => document.getElementById(id).checked;
+    const log = (msg) => { logEl.textContent += `${msg}\n`; logEl.scrollTop = logEl.scrollHeight; };
+
+    function explainFetchFailure(context) {
+      log(`[ERROR] ${context}: Failed to fetch`);
+      log('[INFO] 원인 후보: (1) 브라우저 CORS 차단, (2) API 서버 일시 장애/차단, (3) 네트워크/VPN/광고차단 확장프로그램 간섭, (4) API 키/요금제 제한으로 비정상 응답.');
+      log('[INFO] 해결 방법: 로컬 서버(http://localhost)로 열기, 다른 브라우저/시크릿 모드 시도, 광고차단 해제, API 키 입력, 잠시 후 재시도.');
+    }
+
+    function getSettings() {
+      return {
+        useUsdFilter: on('useUsdFilter'),
+        useSinceFirstTx: on('useSinceFirstTx'),
+        useInboundRatio: on('useInboundRatio'),
+        useUniqueSenders: on('useUniqueSenders'),
+        inboundRatioThreshold: Number(document.getElementById('inboundRatio').value),
+        minSenders: Number(document.getElementById('minSenders').value),
+      };
+    }
+
+    function parseSince(value) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return Math.floor(new Date(`${value}T00:00:00Z`).getTime() / 1000);
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return Math.floor(new Date(`${value}:00Z`).getTime() / 1000);
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(value)) return Math.floor(new Date(`${value}Z`).getTime() / 1000);
+      throw new Error("since 형식 오류: YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM(:SS)");
+    }
+
+
+    async function safeFetchJson(url, options) {
+      let res;
+      try {
+        res = await fetch(url, options);
+      } catch (e) {
+        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) {
+          explainFetchFailure(`safeFetchJson(${url})`);
+          e.__explained = true;
+        }
+        throw e;
+      }
+      if (!res.ok) throw new Error(`http ${res.status}: ${url}`);
+      return await res.json();
+    }
+
+    async function scanCall(chain, apiKey, params) {
+      const url = new URL(SCAN_CONFIG[chain].apiBase);
+      const payload = { ...params };
+      if (apiKey) payload.apikey = apiKey;
+      Object.entries(payload).forEach(([k, v]) => url.searchParams.set(k, v));
+      let res;
+      try {
+        res = await fetch(url);
+      } catch (e) {
+        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) {
+          explainFetchFailure(`scanCall(${params.module}:${params.action})`);
+          e.__explained = true;
+        }
+        throw e;
+      }
+      if (!res.ok) throw new Error(`scan api http error ${res.status}`);
+      const data = await res.json();
+      if (String(data.status) === "0" && (data.result === "" || data.result == null)) throw new Error(`scan api error: ${data.message} / ${data.result}`);
+      return data.result;
+    }
+
+    async function resolveTokenAddress(chain, ticker) {
+      const platform = SCAN_CONFIG[chain].cgPlatform;
+      const tickerUpper = ticker.toUpperCase();
+
+      // 1) CoinGecko search endpoint (lighter than full coins list)
+      try {
+        const search = await safeFetchJson(`https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(ticker)}`);
+        const coins = search?.coins || [];
+        let best = null;
+        for (const coin of coins.slice(0, 15)) {
+          const detail = await safeFetchJson(`https://api.coingecko.com/api/v3/coins/${coin.id}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false`);
+          const contract = detail?.platforms?.[platform];
+          if (!contract) continue;
+          const marketCap = Number(detail?.market_data?.market_cap?.usd || 0);
+          if (!best || marketCap > best.marketCap) best = { contract, marketCap };
+        }
+        if (best?.contract) return best.contract;
+      } catch (e) {
+        log(`[WARN] CoinGecko 주소 탐색 실패: ${String(e.message || e)}`);
+      }
+
+      // 2) Dexscreener fallback
+      try {
+        const ds = await safeFetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(ticker)}`);
+        const chainMap = { ethereum: 'ethereum', bsc: 'bsc', polygon: 'polygon', arbitrum: 'arbitrum', optimism: 'optimism' };
+        const pairs = (ds?.pairs || []).filter((p) => p.chainId === chainMap[chain]);
+        const matched = pairs.filter((p) => String(p.baseToken?.symbol || '').toUpperCase() === tickerUpper || String(p.quoteToken?.symbol || '').toUpperCase() === tickerUpper);
+        matched.sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0));
+        if (matched.length) {
+          const p = matched[0];
+          const baseHit = String(p.baseToken?.symbol || '').toUpperCase() === tickerUpper;
+          return baseHit ? p.baseToken.address : p.quoteToken.address;
+        }
+      } catch (e) {
+        log(`[WARN] Dexscreener 주소 탐색 실패: ${String(e.message || e)}`);
+      }
+
+      throw new Error(`토큰 주소 자동 탐색 실패: ticker=${ticker}. 토큰 CA 주소를 직접 입력해 주세요.`);
+    }
+
+    async function getTokenPrice(chain, contract) {
+      const platform = SCAN_CONFIG[chain].cgPlatform;
+      const chainMap = { ethereum: 'ethereum', bsc: 'bsc', polygon: 'polygon', arbitrum: 'arbitrum', optimism: 'optimism' };
+
+      try {
+        const u = new URL(`https://api.coingecko.com/api/v3/simple/token_price/${platform}`);
+        u.searchParams.set("contract_addresses", contract);
+        u.searchParams.set("vs_currencies", "usd");
+        const data = await safeFetchJson(u.toString());
+        const price = data?.[contract.toLowerCase()]?.usd ?? data?.[contract]?.usd;
+        if (price != null) return Number(price);
+      } catch (e) {
+        log(`[WARN] CoinGecko 가격 조회 실패: ${String(e.message || e)}`);
+      }
+
+      try {
+        const ds = await safeFetchJson(`https://api.dexscreener.com/latest/dex/tokens/${contract}`);
+        const pairs = (ds?.pairs || []).filter((p) => p.chainId === chainMap[chain]);
+        pairs.sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0));
+        if (pairs.length && Number.isFinite(Number(pairs[0].priceUsd))) return Number(pairs[0].priceUsd);
+      } catch (e) {
+        log(`[WARN] Dexscreener 가격 조회 실패: ${String(e.message || e)}`);
+      }
+
+      throw new Error("토큰 가격 조회 실패");
+    }
+
+    async function getTokenDecimals(chain, apiKey, tokenAddress) {
+      try {
+        const res = await scanCall(chain, apiKey, { module: 'proxy', action: 'eth_call', to: tokenAddress, data: '0x313ce567', tag: 'latest' });
+        const d = parseInt(res, 16);
+        return Number.isFinite(d) ? d : 18;
+      } catch {
+        return 18;
+      }
+    }
+
+    function pickQuantityMode(holders) {
+      const samples = holders.slice(0, 30).map((h) => String(h.TokenHolderQuantity ?? h.balance ?? ''));
+      for (const q of samples) {
+        const dot = q.split('.')[1] || '';
+        if (dot.length >= 5) return 'decimal';
+      }
+      return 'raw';
+    }
+
+    function normalizeAmountByMode(quantity, mode, decimals) {
+      const text = String(quantity ?? '0');
+      if (mode === 'decimal') return Number(text);
+      return rawToDecimalAmount(text, decimals);
+    }
+
+
+    function rawToDecimalAmount(rawText, decimals) {
+      const text = String(rawText || '').trim();
+      if (!/^\d+$/.test(text)) return NaN;
+      try {
+        const bi = BigInt(text);
+        const scale = 10n ** BigInt(decimals);
+        const intPart = bi / scale;
+        const fracPart = bi % scale;
+        const fracText = fracPart.toString().padStart(decimals, '0').slice(0, 12);
+        const composed = decimals > 0 ? `${intPart.toString()}.${fracText}` : intPart.toString();
+        return Number(composed);
+      } catch {
+        return NaN;
+      }
+    }
+
+    async function findHolderQuantityForAddress(chain, apiKey, tokenAddress, wallet, maxPages) {
+      const target = wallet.toLowerCase();
+      for (let page = 1; page <= maxPages; page++) {
+        const result = await scanCall(chain, apiKey, { module: 'token', action: 'tokenholderlist', contractaddress: tokenAddress, page, offset: 100 });
+        if (!Array.isArray(result) || result.length === 0) break;
+        const found = result.find((h) => String(h.TokenHolderAddress || h.address || '').toLowerCase() === target);
+        if (found) return String(found.TokenHolderQuantity ?? found.balance ?? '');
+        if (result.length < 100) break;
+      }
+      return null;
+    }
+
+    function parseLogAddress(topic) {
+      if (!topic || typeof topic !== 'string' || !topic.startsWith('0x') || topic.length < 66) return null;
+      return `0x${topic.slice(26)}`.toLowerCase();
+    }
+
+    const PUBLIC_RPCS = {
+      ethereum: ['https://cloudflare-eth.com', 'https://rpc.ankr.com/eth'],
+      bsc: ['https://bsc-dataseed.binance.org', 'https://rpc.ankr.com/bsc'],
+      polygon: ['https://polygon-rpc.com', 'https://rpc.ankr.com/polygon'],
+      arbitrum: ['https://arb1.arbitrum.io/rpc', 'https://rpc.ankr.com/arbitrum'],
+      optimism: ['https://mainnet.optimism.io', 'https://rpc.ankr.com/optimism'],
+    };
+
+    function toTopicAddress(address) {
+      const hex = String(address || '').toLowerCase().replace(/^0x/, '');
+      if (!/^[0-9a-f]{40}$/.test(hex)) return null;
+      return `0x${'0'.repeat(24)}${hex}`;
+    }
+
+    function toHexBlock(n) {
+      return `0x${Math.max(0, n).toString(16)}`;
+    }
+
+    async function rpcCall(chain, method, params) {
+      const rpcUrls = PUBLIC_RPCS[chain] || [];
+      if (!rpcUrls.length) throw new Error(`RPC 미지원 체인: ${chain}`);
+      let lastErr = null;
+      for (const rpcUrl of rpcUrls) {
+        try {
+          const payload = await safeFetchJson(rpcUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+          });
+          if (payload?.error) throw new Error(`rpc ${method} error: ${payload.error?.message || 'unknown'}`);
+          return payload?.result;
+        } catch (e) {
+          lastErr = e;
+          log(`[WARN] RPC 엔드포인트 실패(${rpcUrl}): ${String(e.message || e)}`);
+        }
+      }
+      throw lastErr || new Error(`rpc ${method} failed`);
+    }
+
+    async function getWalletTokenTxViaRpcLogs(chain, tokenAddress, address) {
+      const walletTopic = toTopicAddress(address);
+      if (!walletTopic) return [];
+      const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
+      const latestHex = await rpcCall(chain, 'eth_blockNumber', []);
+      const latest = Number.parseInt(String(latestHex || '0x0'), 16);
+      if (!Number.isFinite(latest) || latest <= 0) return [];
+
+      const windowSize = 50000;
+      const maxWindows = 60;
+      const maxTxLogs = 2500;
+      const merged = [];
+      let endBlock = latest;
+
+      for (let i = 0; i < maxWindows && endBlock >= 0; i++) {
+        const startBlock = Math.max(0, endBlock - windowSize + 1);
+        try {
+          const [inLogs, outLogs] = await Promise.all([
+            rpcCall(chain, 'eth_getLogs', [{
+              fromBlock: toHexBlock(startBlock), toBlock: toHexBlock(endBlock), address: tokenAddress,
+              topics: [transferTopic, null, walletTopic],
+            }]),
+            rpcCall(chain, 'eth_getLogs', [{
+              fromBlock: toHexBlock(startBlock), toBlock: toHexBlock(endBlock), address: tokenAddress,
+              topics: [transferTopic, walletTopic],
+            }]),
+          ]);
+          if (Array.isArray(inLogs) && inLogs.length) merged.push(...inLogs);
+          if (Array.isArray(outLogs) && outLogs.length) merged.push(...outLogs);
+        } catch (e) {
+          log(`[WARN] RPC 청크 조회 실패(${startBlock}-${endBlock}): ${String(e.message || e)}`);
+        }
+        if (merged.length >= maxTxLogs) break;
+        endBlock = startBlock - 1;
+      }
+
+      if (!merged.length) return [];
+
+      const uniqueByKey = new Map();
+      for (const l of merged) {
+        const key = `${l.transactionHash || ''}-${l.logIndex || ''}`;
+        if (!uniqueByKey.has(key)) uniqueByKey.set(key, l);
+      }
+
+      const blockHexes = [...new Set([...uniqueByKey.values()].map((l) => l.blockNumber).filter(Boolean))];
+      const blockTs = new Map();
+      await Promise.all(blockHexes.map(async (bn) => {
+        try {
+          const block = await rpcCall(chain, 'eth_getBlockByNumber', [bn, false]);
+          const ts = Number.parseInt(block?.timestamp || '0x0', 16);
+          blockTs.set(String(bn).toLowerCase(), Number.isFinite(ts) ? ts : 0);
+        } catch {
+          blockTs.set(String(bn).toLowerCase(), 0);
+        }
+      }));
+
+      return [...uniqueByKey.values()]
+        .map((l) => ({
+          timeStamp: String(blockTs.get(String(l.blockNumber || '').toLowerCase()) || 0),
+          from: parseLogAddress(l.topics?.[1]) || '',
+          to: parseLogAddress(l.topics?.[2]) || '',
+          contractAddress: tokenAddress,
+        }))
+        .filter((t) => t.from || t.to)
+        .sort((a, b) => Number(a.timeStamp || 0) - Number(b.timeStamp || 0));
+    }
+
+    async function getTransferRecipientsFallback(chain, apiKey, tokenAddress, decimals) {
+      const latestHex = await scanCall(chain, apiKey, { module: 'proxy', action: 'eth_blockNumber' });
+      const latest = parseInt(latestHex, 16);
+      if (!Number.isFinite(latest)) return [];
+      const from = Math.max(0, latest - 15000);
+      const logs = await scanCall(chain, apiKey, {
+        module: 'logs', action: 'getLogs', fromBlock: String(from), toBlock: 'latest',
+        address: tokenAddress,
+        topic0: '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef',
+        page: 1, offset: 1000,
+      });
+      if (!Array.isArray(logs)) return [];
+      const agg = new Map();
+      for (const l of logs) {
+        const to = parseLogAddress(l.topic2);
+        if (!to) continue;
+        const raw = Number.parseInt((l.data || '0x0').slice(2), 16);
+        const amount = Number.isFinite(raw) ? raw / Math.pow(10, decimals) : 0;
+        agg.set(to, (agg.get(to) || 0) + amount);
+      }
+      return Array.from(agg.entries()).map(([address, token_amount]) => ({ address, token_amount, usd_value: 0 }));
+    }
+
+    async function getWalletTokenTxWithFallback(chain, apiKey, tokenAddress, address) {
+      const addr = String(address).toLowerCase();
+      const ca = String(tokenAddress).toLowerCase();
+
+      // 1) standard explorer path
+      const primary = await scanCall(chain, apiKey, {
+        module: 'account', action: 'tokentx', contractaddress: tokenAddress,
+        address, page: 1, offset: 1000, startblock: 0, endblock: 99999999, sort: 'asc'
+      });
+      if (Array.isArray(primary) && primary.length) return primary;
+
+      // 2) explorer fallback: wallet all token tx -> filter by contract
+      const allTx = await scanCall(chain, apiKey, {
+        module: 'account', action: 'tokentx',
+        address, page: 1, offset: 1000, startblock: 0, endblock: 99999999, sort: 'asc'
+      });
+      if (Array.isArray(allTx) && allTx.length) {
+        const filtered = allTx.filter((t) => String(t.contractAddress || '').toLowerCase() === ca);
+        if (filtered.length) return filtered;
+      }
+
+      // 3) ethereum-only fallback via ethplorer history
+      if (chain === 'ethereum') {
+        try {
+          const hist = await safeFetchJson(`https://api.ethplorer.io/getAddressHistory/${encodeURIComponent(address)}?apiKey=freekey&type=transfer&limit=1000`);
+          const ops = hist?.operations || [];
+          const mapped = ops
+            .filter((op) => String(op?.tokenInfo?.address || '').toLowerCase() === ca)
+            .map((op) => ({
+              timeStamp: String(op.timestamp || 0),
+              from: String(op.from || ''),
+              to: String(op.to || ''),
+              contractAddress: String(op?.tokenInfo?.address || tokenAddress),
+            }));
+          if (mapped.length) return mapped;
+        } catch (e) {
+          log(`[WARN] ethplorer tx fallback 실패: ${String(e.message || e)}`);
+        }
+      }
+
+      // 4) RPC log fallback (explorer 인덱싱 불안정 시 우회)
+      try {
+        const rpcTx = await getWalletTokenTxViaRpcLogs(chain, tokenAddress, address);
+        if (Array.isArray(rpcTx) && rpcTx.length) {
+          log(`[INFO] RPC 로그 fallback으로 tx ${rpcTx.length}건 복구`);
+          return rpcTx;
+        }
+      } catch (e) {
+        log(`[WARN] RPC 로그 fallback 실패: ${String(e.message || e)}`);
+      }
+
+      return [];
+    }
+
+    function passBehavior(txs, address, sinceTs, settings) {
+
+      if (!Array.isArray(txs) || !txs.length) return { pass: false, reason: '토큰 tx 없음', detail: null };
+      const timestamps = txs.map((t) => Number(t.timeStamp || 0)).filter(Boolean);
+      if (!timestamps.length) return { pass: false, reason: '유효한 timestamp 없음', detail: null };
+      if (settings.useSinceFirstTx && Math.min(...timestamps) < sinceTs) return { pass: false, reason: '첫 tx가 since 이전', detail: null };
+
+      const after = txs.filter((t) => Number(t.timeStamp || 0) >= sinceTs);
+      if (!after.length) return { pass: false, reason: 'since 이후 tx 없음', detail: null };
+
+      const addr = address.toLowerCase();
+      const inbound = after.filter((t) => String(t.to || '').toLowerCase() === addr);
+      const inboundRatio = inbound.length / after.length;
+      const uniqueSenders = new Set(inbound.map((t) => String(t.from || '').toLowerCase()).filter(Boolean)).size;
+
+      if (settings.useInboundRatio && inboundRatio < settings.inboundRatioThreshold) return { pass: false, reason: `입금비율 미달(${inboundRatio.toFixed(4)})`, detail: { txCountAfterSince: after.length, inboundRatio, uniqueSenders } };
+      if (settings.useUniqueSenders && uniqueSenders < settings.minSenders) return { pass: false, reason: `송신자수 미달(${uniqueSenders})`, detail: { txCountAfterSince: after.length, inboundRatio, uniqueSenders } };
+      return { pass: true, reason: '조건 통과', detail: { txCountAfterSince: after.length, inboundRatio, uniqueSenders } };
+    }
+
+    function render(signals) {
+      tbody.innerHTML = '';
+      for (const s of signals) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${s.address}</td><td>${s.token_amount.toFixed(8)}</td><td>${s.usd_value.toFixed(2)}</td><td>${s.tx_count_after_since}</td><td>${s.inbound_ratio.toFixed(4)}</td><td>${s.unique_senders}</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function downloadCsv(signals) {
+      const header = ['address', 'token_amount', 'usd_value', 'tx_count_after_since', 'inbound_ratio', 'unique_senders'];
+      const rows = signals.map((s) => [s.address, s.token_amount, s.usd_value, s.tx_count_after_since, s.inbound_ratio, s.unique_senders]);
+      const csv = [header, ...rows].map((r) => r.join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'wallet_signals.csv';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+
+    async function fetchEvmNativeWallet(address, rpcUrl, geckoId, symbol) {
+      const [rpcPayload, pricePayload] = await Promise.all([
+        safeFetchJson(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_getBalance', params: [address, 'latest'], id: 1 }),
+        }),
+        safeFetchJson(`https://api.coingecko.com/api/v3/simple/price?ids=${geckoId}&vs_currencies=usd`),
+      ]);
+
+      const weiHex = rpcPayload?.result;
+      if (!weiHex || typeof weiHex !== 'string') throw new Error('RPC 잔액 조회 실패 (native)');
+      const amount = Number(BigInt(weiHex)) / 1e18;
+      const priceUsd = Number(pricePayload?.[geckoId]?.usd || 0);
+
+      return [{ symbol, tokenAddress: 'native', amount, priceUsd, valueUsd: amount * priceUsd }];
+    }
+
+    async function fetchEthereumWalletFromEthplorer(address) {
+      const data = await safeFetchJson(`https://api.ethplorer.io/getAddressInfo/${encodeURIComponent(address)}?apiKey=freekey`);
+      const tokens = data.tokens || [];
+      return tokens
+        .map(({ tokenInfo, balance }) => {
+          const decimals = Number(tokenInfo?.decimals || 0);
+          const amount = Number(balance || 0) / 10 ** decimals;
+          const priceUsd = Number(tokenInfo?.price?.rate || 0);
+          return {
+            symbol: tokenInfo?.symbol || tokenInfo?.name || 'UNKNOWN',
+            tokenAddress: String(tokenInfo?.address || '').toLowerCase(),
+            amount,
+            priceUsd,
+            valueUsd: amount * priceUsd,
+          };
+        })
+        .filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+    }
+
+    async function fetchEthereumWallet(address) {
+      const [ethplorerResult, nativeResult] = await Promise.allSettled([
+        fetchEthereumWalletFromEthplorer(address),
+        fetchEvmNativeWallet(address, 'https://cloudflare-eth.com', 'ethereum', 'ETH'),
+      ]);
+
+      const ethplorerTokens = ethplorerResult.status === 'fulfilled' ? ethplorerResult.value : [];
+      const nativeTokens = nativeResult.status === 'fulfilled' ? nativeResult.value : [];
+
+      const byKey = new Map();
+      [...nativeTokens, ...ethplorerTokens].forEach((token) => {
+        const key = `${token.symbol}|${Number(token.amount).toFixed(8)}|${token.tokenAddress || ''}`;
+        if (!byKey.has(key)) byKey.set(key, token);
+      });
+
+      const merged = [...byKey.values()].filter((token) => Number.isFinite(token.amount) && token.amount > 0 && Number.isFinite(token.valueUsd));
+      if (!merged.length && ethplorerResult.status === 'rejected' && nativeResult.status === 'rejected') {
+        throw new Error('Ethereum 조회 실패: API 응답을 확인해 주세요.');
+      }
+
+      return {
+        tokens: merged,
+        warning: ethplorerResult.status === 'rejected' ? `Ethplorer 조회 실패: ${String(ethplorerResult.reason?.message || ethplorerResult.reason)}` : '',
+      };
+    }
+
+    async function resolveTokenAndPrice(chain, ticker, inputTokenAddress) {
+
+      const tokenAddress = inputTokenAddress || await resolveTokenAddress(chain, ticker);
+      const price = await getTokenPrice(chain, tokenAddress);
+      return { tokenAddress, price };
+    }
+
+    checkBtn.onclick = async () => {
+      logEl.textContent = '';
+      tbody.innerHTML = '';
+      const target = document.getElementById('targetWallet').value.trim();
+      if (!target) {
+        log('[ERROR] 특정 지갑 주소를 입력하세요.');
+        return;
+      }
+
+      try {
+        checkBtn.disabled = true;
+        const chain = document.getElementById('chain').value;
+        const ticker = document.getElementById('ticker').value.trim();
+        const apiKey = document.getElementById('apiKey').value.trim();
+        const sinceTs = parseSince(document.getElementById('since').value.trim());
+        const inputTokenAddress = document.getElementById('tokenAddress').value.trim();
+        const minUsd = Number(document.getElementById('minUsd').value);
+        const maxUsd = Number(document.getElementById('maxUsd').value);
+        const settings = getSettings();
+
+        const { tokenAddress, price } = await resolveTokenAndPrice(chain, ticker, inputTokenAddress);
+        const decimals = await getTokenDecimals(chain, apiKey, tokenAddress);
+
+        let tokenAmount = NaN;
+        let usdValue = NaN;
+
+        if (chain === 'ethereum') {
+          try {
+            const ethWallet = await fetchEthereumWallet(target);
+            if (ethWallet.warning) log(`[WARN] ${ethWallet.warning}`);
+            const matched = ethWallet.tokens.find((t) => String(t.tokenAddress || '').toLowerCase() === tokenAddress.toLowerCase());
+            if (matched) {
+              tokenAmount = Number(matched.amount);
+              usdValue = Number(matched.valueUsd);
+            }
+          } catch (e) {
+            log(`[WARN] Ethereum wallet 병합 조회 실패, 기본 tokenbalance 방식으로 재시도: ${String(e.message || e)}`);
+          }
+        }
+
+        if (!Number.isFinite(tokenAmount)) {
+          const rawBal = await scanCall(chain, apiKey, { module: 'account', action: 'tokenbalance', contractaddress: tokenAddress, address: target, tag: 'latest' });
+          tokenAmount = rawToDecimalAmount(rawBal, decimals);
+          usdValue = Number.isFinite(tokenAmount) ? tokenAmount * price : NaN;
+        }
+
+        if (!Number.isFinite(tokenAmount)) {
+          log('[WARN] tokenbalance 값이 숫자로 해석되지 않아 holder 목록에서 대상 지갑 수량 재시도합니다.');
+          const holderQty = await findHolderQuantityForAddress(chain, apiKey, tokenAddress, target, 20);
+          if (holderQty !== null) {
+            tokenAmount = holderQty.includes('.') ? Number(holderQty) : rawToDecimalAmount(holderQty, decimals);
+            usdValue = Number.isFinite(tokenAmount) ? tokenAmount * price : NaN;
+          }
+        }
+
+        let usdPass = true;
+        if (settings.useUsdFilter) {
+          usdPass = Number.isFinite(usdValue) && usdValue >= minUsd && usdValue <= maxUsd;
+          if (!Number.isFinite(usdValue)) {
+            log('[WARN] USD 계산 실패(NaN): API 응답 형식 또는 플랜 제한으로 balance를 읽지 못했습니다. API 키 입력 후 재시도 권장.');
+          }
+        }
+
+        const txs = await getWalletTokenTxWithFallback(chain, apiKey, tokenAddress, target);
+        const behaviorOff = !settings.useSinceFirstTx && !settings.useInboundRatio && !settings.useUniqueSenders;
+        const behavior = behaviorOff ? { pass: true, reason: '행동조건 OFF', detail: { txCountAfterSince: 0, inboundRatio: 0, uniqueSenders: 0 } } : passBehavior(txs, target, sinceTs, settings);
+        if (!behaviorOff && (!Array.isArray(txs) || !txs.length)) log('[WARN] 토큰 tx가 비어 explorer/ethplorer/RPC fallback까지 시도했지만 데이터를 찾지 못했습니다.');
+
+        const finalPass = usdPass && behavior.pass;
+        log(`[INFO] target=${target}`);
+        log(`[INFO] balance=${tokenAmount.toFixed(8)}, usd=${usdValue.toFixed(2)}, usdPass=${usdPass}`);
+        log(`[INFO] behaviorPass=${behavior.pass}, reason=${behavior.reason}`);
+        log(`[DONE] target wallet match=${finalPass}`);
+
+        if (finalPass) {
+          render([{ address: target, token_amount: tokenAmount, usd_value: usdValue, tx_count_after_since: behavior.detail.txCountAfterSince, inbound_ratio: behavior.detail.inboundRatio, unique_senders: behavior.detail.uniqueSenders }]);
+        }
+      } catch (e) {
+        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) {
+        if (!e.__explained) explainFetchFailure('요청');
+      } else {
+        log(`[ERROR] ${e.message}`);
+      }
+      } finally {
+        checkBtn.disabled = false;
+      }
+    };
+
+    runBtn.onclick = async () => {
+      latestSignals = [];
+      downloadBtn.disabled = true;
+      tbody.innerHTML = '';
+      logEl.textContent = '';
+      try {
+        runBtn.disabled = true;
+        const chain = document.getElementById('chain').value;
+        const ticker = document.getElementById('ticker').value.trim();
+        const apiKey = document.getElementById('apiKey').value.trim();
+        const sinceTs = parseSince(document.getElementById('since').value.trim());
+        const inputTokenAddress = document.getElementById('tokenAddress').value.trim();
+        const minUsd = Number(document.getElementById('minUsd').value);
+        const maxUsd = Number(document.getElementById('maxUsd').value);
+        const settings = getSettings();
+        const maxPages = Number(document.getElementById('maxPages').value);
+
+        const { tokenAddress, price } = await resolveTokenAndPrice(chain, ticker, inputTokenAddress);
+        log(`[INFO] tokenAddress=${tokenAddress}`);
+        log(`[INFO] tokenPriceUsd=${price}`);
+
+        const holders = [];
+        for (let page = 1; page <= maxPages; page++) {
+          const result = await scanCall(chain, apiKey, { module: 'token', action: 'tokenholderlist', contractaddress: tokenAddress, page, offset: 100 });
+          if (!Array.isArray(result) || result.length === 0) break;
+          holders.push(...result);
+          if (result.length < 100) break;
+        }
+
+        const quantityMode = pickQuantityMode(holders);
+        const tokenDecimals = quantityMode === 'raw' ? await getTokenDecimals(chain, apiKey, tokenAddress) : 0;
+        log(`[INFO] quantity mode=${quantityMode}${quantityMode === 'raw' ? `, decimals=${tokenDecimals}` : ''}`);
+
+        let candidates = holders.map((h) => {
+          const address = h.TokenHolderAddress || h.address;
+          const amount = normalizeAmountByMode(h.TokenHolderQuantity ?? h.balance, quantityMode, tokenDecimals);
+          return { address, token_amount: amount, usd_value: amount * price };
+        }).filter((h) => h.address && Number.isFinite(h.usd_value));
+
+        if (!candidates.length) {
+          log('[WARN] holder 데이터가 비어 fallback(최근 Transfer 수신자) 시도합니다.');
+          const fallbackCandidates = await getTransferRecipientsFallback(chain, apiKey, tokenAddress, tokenDecimals || 18);
+          if (fallbackCandidates.length) {
+            candidates = fallbackCandidates;
+            log(`[INFO] fallback candidates=${candidates.length} (최근 Transfer 로그 기반)`);
+          }
+        }
+
+        if (settings.useUsdFilter) candidates = candidates.filter((h) => h.usd_value >= minUsd && h.usd_value <= maxUsd);
+        log(`[INFO] candidate holders=${candidates.length}`);
+
+        const allBehaviorOff = !settings.useSinceFirstTx && !settings.useInboundRatio && !settings.useUniqueSenders;
+        const signals = [];
+
+        if (allBehaviorOff) {
+          for (const c of candidates) signals.push({ address: c.address, token_amount: c.token_amount, usd_value: c.usd_value, tx_count_after_since: 0, inbound_ratio: 0, unique_senders: 0 });
+        } else {
+          for (const c of candidates) {
+            const txs = await getWalletTokenTxWithFallback(chain, apiKey, tokenAddress, c.address);
+            const r = passBehavior(txs, c.address, sinceTs, settings);
+            if (r.pass) signals.push({ address: c.address, token_amount: c.token_amount, usd_value: c.usd_value, tx_count_after_since: r.detail.txCountAfterSince, inbound_ratio: r.detail.inboundRatio, unique_senders: r.detail.uniqueSenders });
+          }
+        }
+
+        if (!signals.length && !candidates.length) log('[WARN] 여전히 0건이면 특정 지갑 체크 기능으로 개별 주소를 검증해 보세요.');
+
+        latestSignals = signals;
+        render(signals);
+        downloadBtn.disabled = signals.length === 0;
+        log(`[DONE] signals=${signals.length}`);
+      } catch (e) {
+        if (e instanceof TypeError && String(e.message).includes('Failed to fetch')) {
+        if (!e.__explained) explainFetchFailure('요청');
+      } else {
+        log(`[ERROR] ${e.message}`);
+      }
+      } finally {
+        runBtn.disabled = false;
+      }
+    };
+
+    downloadBtn.onclick = () => downloadCsv(latestSignals);
+  </script>
+</body>
+</html>
