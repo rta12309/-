@@ -274,12 +274,12 @@
       return `0x${topic.slice(26)}`.toLowerCase();
     }
 
-    const PUBLIC_RPC = {
-      ethereum: 'https://cloudflare-eth.com',
-      bsc: 'https://bsc-dataseed.binance.org',
-      polygon: 'https://polygon-rpc.com',
-      arbitrum: 'https://arb1.arbitrum.io/rpc',
-      optimism: 'https://mainnet.optimism.io',
+    const PUBLIC_RPCS = {
+      ethereum: ['https://cloudflare-eth.com', 'https://rpc.ankr.com/eth'],
+      bsc: ['https://bsc-dataseed.binance.org', 'https://rpc.ankr.com/bsc'],
+      polygon: ['https://polygon-rpc.com', 'https://rpc.ankr.com/polygon'],
+      arbitrum: ['https://arb1.arbitrum.io/rpc', 'https://rpc.ankr.com/arbitrum'],
+      optimism: ['https://mainnet.optimism.io', 'https://rpc.ankr.com/optimism'],
     };
 
     function toTopicAddress(address) {
@@ -288,16 +288,29 @@
       return `0x${'0'.repeat(24)}${hex}`;
     }
 
+    function toHexBlock(n) {
+      return `0x${Math.max(0, n).toString(16)}`;
+    }
+
     async function rpcCall(chain, method, params) {
-      const rpcUrl = PUBLIC_RPC[chain];
-      if (!rpcUrl) throw new Error(`RPC 미지원 체인: ${chain}`);
-      const payload = await safeFetchJson(rpcUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-      });
-      if (payload?.error) throw new Error(`rpc ${method} error: ${payload.error?.message || 'unknown'}`);
-      return payload?.result;
+      const rpcUrls = PUBLIC_RPCS[chain] || [];
+      if (!rpcUrls.length) throw new Error(`RPC 미지원 체인: ${chain}`);
+      let lastErr = null;
+      for (const rpcUrl of rpcUrls) {
+        try {
+          const payload = await safeFetchJson(rpcUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+          });
+          if (payload?.error) throw new Error(`rpc ${method} error: ${payload.error?.message || 'unknown'}`);
+          return payload?.result;
+        } catch (e) {
+          lastErr = e;
+          log(`[WARN] RPC 엔드포인트 실패(${rpcUrl}): ${String(e.message || e)}`);
+        }
+      }
+      throw lastErr || new Error(`rpc ${method} failed`);
     }
 
     async function getWalletTokenTxViaRpcLogs(chain, tokenAddress, address) {
@@ -305,19 +318,38 @@
       if (!walletTopic) return [];
       const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 
-      // in/out 모두 조회
-      const [inLogs, outLogs] = await Promise.all([
-        rpcCall(chain, 'eth_getLogs', [{
-          fromBlock: '0x0', toBlock: 'latest', address: tokenAddress,
-          topics: [transferTopic, null, walletTopic],
-        }]),
-        rpcCall(chain, 'eth_getLogs', [{
-          fromBlock: '0x0', toBlock: 'latest', address: tokenAddress,
-          topics: [transferTopic, walletTopic],
-        }]),
-      ]);
+      const latestHex = await rpcCall(chain, 'eth_blockNumber', []);
+      const latest = Number.parseInt(String(latestHex || '0x0'), 16);
+      if (!Number.isFinite(latest) || latest <= 0) return [];
 
-      const merged = [...(Array.isArray(inLogs) ? inLogs : []), ...(Array.isArray(outLogs) ? outLogs : [])];
+      const windowSize = 50000;
+      const maxWindows = 60;
+      const maxTxLogs = 2500;
+      const merged = [];
+      let endBlock = latest;
+
+      for (let i = 0; i < maxWindows && endBlock >= 0; i++) {
+        const startBlock = Math.max(0, endBlock - windowSize + 1);
+        try {
+          const [inLogs, outLogs] = await Promise.all([
+            rpcCall(chain, 'eth_getLogs', [{
+              fromBlock: toHexBlock(startBlock), toBlock: toHexBlock(endBlock), address: tokenAddress,
+              topics: [transferTopic, null, walletTopic],
+            }]),
+            rpcCall(chain, 'eth_getLogs', [{
+              fromBlock: toHexBlock(startBlock), toBlock: toHexBlock(endBlock), address: tokenAddress,
+              topics: [transferTopic, walletTopic],
+            }]),
+          ]);
+          if (Array.isArray(inLogs) && inLogs.length) merged.push(...inLogs);
+          if (Array.isArray(outLogs) && outLogs.length) merged.push(...outLogs);
+        } catch (e) {
+          log(`[WARN] RPC 청크 조회 실패(${startBlock}-${endBlock}): ${String(e.message || e)}`);
+        }
+        if (merged.length >= maxTxLogs) break;
+        endBlock = startBlock - 1;
+      }
+
       if (!merged.length) return [];
 
       const uniqueByKey = new Map();

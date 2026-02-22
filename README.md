@@ -27,8 +27,8 @@
   1. Explorer `tokentx(contractaddress + address)`
   2. Explorer `tokentx(address)` 후 토큰 CA 필터
   3. (Ethereum) Ethplorer address history
-  4. RPC `eth_getLogs` (Transfer topic) + `eth_getBlockByNumber` timestamp 복원
-- 따라서 Explorer 인덱싱이 비거나 제한될 때도 RPC 로그로 tx를 복구할 수 있습니다.
+  4. 다중 Public RPC + 청크 스캔 `eth_getLogs` (Transfer topic) + `eth_getBlockByNumber` timestamp 복원
+- 따라서 Explorer 인덱싱이 비거나 제한될 때도, 한 번에 전체 블록을 조회하지 않고 청크 단위로 내려가며 tx를 복구할 수 있습니다.
 
 ## Quantity 처리 방식
 - 별도의 `raw 체크` / `decimals` 수동 입력을 제거했습니다.
