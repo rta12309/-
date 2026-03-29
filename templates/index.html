@@ -35,19 +35,21 @@
     </div>
     <hr />
     <div class="row">
-      <label>업비트 티커(예: OM) <input id="tickerUpbit" type="text" value="OM"></label>
+      <label>업비트 티커/숫자 <input id="tickerUpbit" type="text" value="OM"></label>
       <label><input id="enableUpbit" type="checkbox" checked> 업비트 탐색 ON</label>
-      <label>빗썸 티커(예: OM) <input id="tickerBithumb" type="text" value="OM"></label>
+      <label>빗썸 티커/숫자 <input id="tickerBithumb" type="text" value="OM"></label>
       <label><input id="enableBithumb" type="checkbox" checked> 빗썸 탐색 ON</label>
-      <label>바이낸스 티커(예: OM) <input id="tickerBinance" type="text" value="OM"></label>
+      <label>바이낸스 티커/숫자 <input id="tickerBinance" type="text" value="OM"></label>
       <label><input id="enableBinance" type="checkbox" checked> 바이낸스 탐색 ON</label>
+      <label>바이비트 티커/숫자 <input id="tickerBybit" type="text" value="OM"></label>
+      <label><input id="enableBybit" type="checkbox" checked> 바이비트 탐색 ON</label>
       <label>임계값(%) <input id="threshold" type="number" step="0.1" value="5"></label>
       <label>조회주기(초) <input id="interval" type="number" min="3" value="5"></label>
       <label>쿨다운(초) <input id="cooldown" type="number" min="10" value="300"></label>
       <label>현물/선물 괴리 차단값(%) <input id="gapThreshold" type="number" step="0.1" min="0.1" value="2"></label>
       <label><input id="webAlertToggle" type="checkbox" checked> 웹 알림 ON</label>
       <label><input id="tgToggle" type="checkbox"> 텔레그램 ON</label>
-      <label><input id="ignoreSpotFuturesGap" type="checkbox"> 현물/선물 괴리 차단 ON</label>
+      <label><input id="ignoreSpotFuturesGap" type="checkbox"> 선물/현물 괴리 차단 ON</label>
     </div>
     <div class="row" style="margin-top: 8px;">
       <label>Telegram Bot Token <input id="tgToken" type="text" placeholder="12345:ABC..."></label>
@@ -66,21 +68,28 @@
         <tr><td>바이낸스 현물 <span class="tickerBinanceText">OM</span>USDT</td><td id="pBinanceSpotUsdt">-</td></tr>
         <tr><td>바이낸스 선물 <span class="tickerBinanceText">OM</span>USDT</td><td id="pBinanceFuturesUsdt">-</td></tr>
         <tr><td>바이낸스 선물-현물 가격차이(%)</td><td id="pBinanceGap">-</td></tr>
+        <tr><td>바이비트 현물 <span class="tickerBybitText">OM</span>USDT</td><td id="pBybitSpotUsdt">-</td></tr>
+        <tr><td>바이비트 선물 <span class="tickerBybitText">OM</span>USDT</td><td id="pBybitFuturesUsdt">-</td></tr>
+        <tr><td>바이비트 선물-현물 가격차이(%)</td><td id="pBybitGap">-</td></tr>
         <tr><td>USDT→KRW (업비트 KRW-USDT)</td><td id="pUsdtKrw">-</td></tr>
         <tr><td>바이낸스 현물 환산 KRW</td><td id="pBinanceSpotKrw">-</td></tr>
+        <tr><td>바이비트 현물 환산 KRW</td><td id="pBybitSpotKrw">-</td></tr>
       </tbody>
     </table>
     <p class="muted">마지막 업데이트: <span id="updatedAt">-</span></p>
   </div>
 
   <div class="card">
-    <h3>가격 차이(diff%) - 업비트/빗썸/바이낸스 현물 비교</h3>
+    <h3>가격 차이(diff%)</h3>
     <table>
       <thead><tr><th>비교쌍</th><th>diff%</th><th>상태</th></tr></thead>
       <tbody>
-        <tr id="row-upbit_bithumb"><td>업비트 ↔ 빗썸</td><td id="dUpbitBithumb">-</td><td id="sUpbitBithumb">-</td></tr>
-        <tr id="row-upbit_binance_spot"><td>업비트 ↔ 바이낸스 현물(환산)</td><td id="dUpbitBinanceSpot">-</td><td id="sUpbitBinanceSpot">-</td></tr>
-        <tr id="row-bithumb_binance_spot"><td>빗썸 ↔ 바이낸스 현물(환산)</td><td id="dBithumbBinanceSpot">-</td><td id="sBithumbBinanceSpot">-</td></tr>
+        <tr id="row-upbit_bithumb"><td>업비트 ↔ 빗썸</td><td id="d-upbit_bithumb">-</td><td id="s-upbit_bithumb">-</td></tr>
+        <tr id="row-upbit_binance"><td>업비트 ↔ 바이낸스 현물(환산)</td><td id="d-upbit_binance">-</td><td id="s-upbit_binance">-</td></tr>
+        <tr id="row-bithumb_binance"><td>빗썸 ↔ 바이낸스 현물(환산)</td><td id="d-bithumb_binance">-</td><td id="s-bithumb_binance">-</td></tr>
+        <tr id="row-upbit_bybit"><td>업비트 ↔ 바이비트 현물(환산)</td><td id="d-upbit_bybit">-</td><td id="s-upbit_bybit">-</td></tr>
+        <tr id="row-bithumb_bybit"><td>빗썸 ↔ 바이비트 현물(환산)</td><td id="d-bithumb_bybit">-</td><td id="s-bithumb_bybit">-</td></tr>
+        <tr id="row-binance_bybit"><td>바이낸스 현물 ↔ 바이비트 현물(환산)</td><td id="d-binance_bybit">-</td><td id="s-binance_bybit">-</td></tr>
       </tbody>
     </table>
   </div>
@@ -141,11 +150,19 @@
       return Math.abs(a - b) / minV * 100;
     }
 
+    function parseMaybeNumber(s) {
+      const t = (s || '').trim();
+      if (!t) return null;
+      if (/^[0-9]+(\.[0-9]+)?$/.test(t)) return Number(t);
+      return null;
+    }
+
     function currentSymbols() {
       return {
         upbit: (document.getElementById('tickerUpbit').value || 'OM').trim().toUpperCase(),
         bithumb: (document.getElementById('tickerBithumb').value || 'OM').trim().toUpperCase(),
         binance: (document.getElementById('tickerBinance').value || 'OM').trim().toUpperCase(),
+        bybit: (document.getElementById('tickerBybit').value || 'OM').trim().toUpperCase(),
       };
     }
 
@@ -154,6 +171,7 @@
         upbit: document.getElementById('enableUpbit').checked,
         bithumb: document.getElementById('enableBithumb').checked,
         binance: document.getElementById('enableBinance').checked,
+        bybit: document.getElementById('enableBybit').checked,
       };
     }
 
@@ -161,23 +179,26 @@
       document.querySelectorAll('.tickerUpbitText').forEach(el => { el.textContent = symbols.upbit; });
       document.querySelectorAll('.tickerBithumbText').forEach(el => { el.textContent = symbols.bithumb; });
       document.querySelectorAll('.tickerBinanceText').forEach(el => { el.textContent = symbols.binance; });
+      document.querySelectorAll('.tickerBybitText').forEach(el => { el.textContent = symbols.bybit; });
     }
 
     function updateDiffRow(key, value, threshold) {
-      const map = {
-        upbit_bithumb: ['dUpbitBithumb', 'sUpbitBithumb'],
-        upbit_binance_spot: ['dUpbitBinanceSpot', 'sUpbitBinanceSpot'],
-        bithumb_binance_spot: ['dBithumbBinanceSpot', 'sBithumbBinanceSpot'],
-      };
-      const [diffEl, statusEl] = map[key];
-      document.getElementById(diffEl).textContent = `${num(value, 2)}%`;
+      const diffEl = document.getElementById(`d-${key}`);
+      const statusEl = document.getElementById(`s-${key}`);
       const row = document.getElementById(`row-${key}`);
+      if (value === null) {
+        diffEl.textContent = '-';
+        statusEl.textContent = '데이터없음';
+        row.className = '';
+        return;
+      }
+      diffEl.textContent = `${num(value, 2)}%`;
       if (value >= threshold) {
         row.className = 'danger';
-        document.getElementById(statusEl).textContent = '⚠️ 임계값 초과';
+        statusEl.textContent = '⚠️ 임계값 초과';
       } else {
         row.className = 'ok';
-        document.getElementById(statusEl).textContent = '정상';
+        statusEl.textContent = '정상';
       }
     }
 
@@ -188,11 +209,7 @@
     }
 
     async function safeFetchJson(url) {
-      try {
-        return await fetchJson(url);
-      } catch (e) {
-        return null;
-      }
+      try { return await fetchJson(url); } catch { return null; }
     }
 
     function parseUpbitPrice(data) {
@@ -210,33 +227,74 @@
       return null;
     }
 
+    function parseBybitPrice(data) {
+      const list = data?.result?.list;
+      if (Array.isArray(list) && list[0] && list[0].lastPrice) return Number(list[0].lastPrice);
+      return null;
+    }
+
     async function getPrices(symbols, enabled) {
+      const upbitNum = parseMaybeNumber(symbols.upbit);
+      const bithumbNum = parseMaybeNumber(symbols.bithumb);
+      const binanceNum = parseMaybeNumber(symbols.binance);
+      const bybitNum = parseMaybeNumber(symbols.bybit);
+
       const upbitMarket = `KRW-${symbols.upbit}`;
       const bithumbMarket = `${symbols.bithumb}_KRW`;
       const binanceSymbol = `${symbols.binance}USDT`;
+      const bybitSymbol = `${symbols.bybit}USDT`;
 
-      const [upbitTicker, upbitUsdt, bithumb, binanceSpot, binanceFutures] = await Promise.all([
-        enabled.upbit ? safeFetchJson(`https://api.upbit.com/v1/ticker?markets=${upbitMarket}`) : Promise.resolve(null),
+      const [upbitTicker, upbitUsdt, bithumb, binanceSpot, binanceFutures, bybitSpot, bybitFutures] = await Promise.all([
+        (enabled.upbit && upbitNum === null) ? safeFetchJson(`https://api.upbit.com/v1/ticker?markets=${upbitMarket}`) : Promise.resolve(null),
         enabled.upbit ? safeFetchJson('https://api.upbit.com/v1/ticker?markets=KRW-USDT') : Promise.resolve(null),
-        enabled.bithumb ? safeFetchJson(`https://api.bithumb.com/public/ticker/${bithumbMarket}`) : Promise.resolve(null),
-        enabled.binance ? safeFetchJson(`https://api.binance.com/api/v3/ticker/price?symbol=${binanceSymbol}`) : Promise.resolve(null),
-        enabled.binance ? safeFetchJson(`https://fapi.binance.com/fapi/v2/ticker/price?symbol=${binanceSymbol}`) : Promise.resolve(null),
+        (enabled.bithumb && bithumbNum === null) ? safeFetchJson(`https://api.bithumb.com/public/ticker/${bithumbMarket}`) : Promise.resolve(null),
+        (enabled.binance && binanceNum === null) ? safeFetchJson(`https://api.binance.com/api/v3/ticker/price?symbol=${binanceSymbol}`) : Promise.resolve(null),
+        (enabled.binance && binanceNum === null) ? safeFetchJson(`https://fapi.binance.com/fapi/v2/ticker/price?symbol=${binanceSymbol}`) : Promise.resolve(null),
+        (enabled.bybit && bybitNum === null) ? safeFetchJson(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${bybitSymbol}`) : Promise.resolve(null),
+        (enabled.bybit && bybitNum === null) ? safeFetchJson(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${bybitSymbol}`) : Promise.resolve(null),
       ]);
 
       const result = {
-        upbitKrw: parseUpbitPrice(upbitTicker),
+        upbitKrw: null,
         usdtKrw: parseUpbitPrice(upbitUsdt),
-        bithumbKrw: parseBithumbPrice(bithumb),
-        binanceSpotUsdt: parseBinancePrice(binanceSpot),
-        binanceFuturesUsdt: parseBinancePrice(binanceFutures),
+        bithumbKrw: null,
+        binanceSpotUsdt: null,
+        binanceFuturesUsdt: null,
+        bybitSpotUsdt: null,
+        bybitFuturesUsdt: null,
         errors: [],
       };
 
-      if (enabled.upbit && result.upbitKrw === null) result.errors.push(`업비트 ${upbitMarket} 미지원/조회실패`);
+      // 숫자 입력이면 해당 숫자를 티커 + 달러기준 가격(USDT)으로 간주
+      if (upbitNum !== null) result.upbitKrw = (result.usdtKrw !== null) ? upbitNum * result.usdtKrw : null;
+      else result.upbitKrw = parseUpbitPrice(upbitTicker);
+
+      if (bithumbNum !== null) result.bithumbKrw = (result.usdtKrw !== null) ? bithumbNum * result.usdtKrw : null;
+      else result.bithumbKrw = parseBithumbPrice(bithumb);
+
+      if (binanceNum !== null) {
+        result.binanceSpotUsdt = binanceNum;
+        result.binanceFuturesUsdt = binanceNum;
+      } else {
+        result.binanceSpotUsdt = parseBinancePrice(binanceSpot);
+        result.binanceFuturesUsdt = parseBinancePrice(binanceFutures);
+      }
+
+      if (bybitNum !== null) {
+        result.bybitSpotUsdt = bybitNum;
+        result.bybitFuturesUsdt = bybitNum;
+      } else {
+        result.bybitSpotUsdt = parseBybitPrice(bybitSpot);
+        result.bybitFuturesUsdt = parseBybitPrice(bybitFutures);
+      }
+
       if (enabled.upbit && result.usdtKrw === null) result.errors.push('업비트 KRW-USDT 조회실패');
-      if (enabled.bithumb && result.bithumbKrw === null) result.errors.push(`빗썸 ${bithumbMarket} 미지원/조회실패`);
-      if (enabled.binance && result.binanceSpotUsdt === null) result.errors.push(`바이낸스 현물 ${binanceSymbol} 미지원/조회실패`);
-      if (enabled.binance && result.binanceFuturesUsdt === null) result.errors.push(`바이낸스 선물 ${binanceSymbol} 미지원/조회실패`);
+      if (enabled.upbit && upbitNum === null && result.upbitKrw === null) result.errors.push(`업비트 ${upbitMarket} 미지원/조회실패`);
+      if (enabled.bithumb && bithumbNum === null && result.bithumbKrw === null) result.errors.push(`빗썸 ${bithumbMarket} 미지원/조회실패`);
+      if (enabled.binance && binanceNum === null && result.binanceSpotUsdt === null) result.errors.push(`바이낸스 현물 ${binanceSymbol} 미지원/조회실패`);
+      if (enabled.binance && binanceNum === null && result.binanceFuturesUsdt === null) result.errors.push(`바이낸스 선물 ${binanceSymbol} 미지원/조회실패`);
+      if (enabled.bybit && bybitNum === null && result.bybitSpotUsdt === null) result.errors.push(`바이비트 현물 ${bybitSymbol} 미지원/조회실패`);
+      if (enabled.bybit && bybitNum === null && result.bybitFuturesUsdt === null) result.errors.push(`바이비트 선물 ${bybitSymbol} 미지원/조회실패`);
 
       return result;
     }
@@ -247,9 +305,7 @@
       if (!token || !chatId) throw new Error('텔레그램 토큰/Chat ID를 입력하세요.');
       const url = `https://api.telegram.org/bot${token}/sendMessage`;
       const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, text }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error('텔레그램 전송 실패');
@@ -266,64 +322,68 @@
         const gapThreshold = Number(document.getElementById('gapThreshold').value || 2);
 
         const p = await getPrices(symbols, enabled);
-        const binanceSpotKrw = (p.binanceSpotUsdt !== null && p.usdtKrw !== null) ? (p.binanceSpotUsdt * p.usdtKrw) : null;
-        const spotFuturesGap = (p.binanceSpotUsdt !== null && p.binanceFuturesUsdt !== null)
-          ? diffPercent(p.binanceSpotUsdt, p.binanceFuturesUsdt)
-          : null;
+        const binanceSpotKrw = (p.binanceSpotUsdt !== null && p.usdtKrw !== null) ? p.binanceSpotUsdt * p.usdtKrw : null;
+        const bybitSpotKrw = (p.bybitSpotUsdt !== null && p.usdtKrw !== null) ? p.bybitSpotUsdt * p.usdtKrw : null;
+        const binanceGap = (p.binanceSpotUsdt !== null && p.binanceFuturesUsdt !== null) ? diffPercent(p.binanceSpotUsdt, p.binanceFuturesUsdt) : null;
+        const bybitGap = (p.bybitSpotUsdt !== null && p.bybitFuturesUsdt !== null) ? diffPercent(p.bybitSpotUsdt, p.bybitFuturesUsdt) : null;
 
         document.getElementById('pUpbit').textContent = p.upbitKrw !== null ? `${num(p.upbitKrw)} KRW` : '-';
         document.getElementById('pBithumb').textContent = p.bithumbKrw !== null ? `${num(p.bithumbKrw)} KRW` : '-';
         document.getElementById('pBinanceSpotUsdt').textContent = p.binanceSpotUsdt !== null ? `${num(p.binanceSpotUsdt, 6)} USDT` : '-';
         document.getElementById('pBinanceFuturesUsdt').textContent = p.binanceFuturesUsdt !== null ? `${num(p.binanceFuturesUsdt, 6)} USDT` : '-';
-        document.getElementById('pBinanceGap').textContent = spotFuturesGap !== null ? `${num(spotFuturesGap, 2)}%` : '-';
+        document.getElementById('pBinanceGap').textContent = binanceGap !== null ? `${num(binanceGap, 2)}%` : '-';
+        document.getElementById('pBybitSpotUsdt').textContent = p.bybitSpotUsdt !== null ? `${num(p.bybitSpotUsdt, 6)} USDT` : '-';
+        document.getElementById('pBybitFuturesUsdt').textContent = p.bybitFuturesUsdt !== null ? `${num(p.bybitFuturesUsdt, 6)} USDT` : '-';
+        document.getElementById('pBybitGap').textContent = bybitGap !== null ? `${num(bybitGap, 2)}%` : '-';
         document.getElementById('pUsdtKrw').textContent = p.usdtKrw !== null ? `${num(p.usdtKrw)} KRW` : '-';
         document.getElementById('pBinanceSpotKrw').textContent = binanceSpotKrw !== null ? `${num(binanceSpotKrw)} KRW` : '-';
+        document.getElementById('pBybitSpotKrw').textContent = bybitSpotKrw !== null ? `${num(bybitSpotKrw)} KRW` : '-';
         document.getElementById('updatedAt').textContent = new Date().toLocaleString();
 
         const diffs = {
           upbit_bithumb: (p.upbitKrw !== null && p.bithumbKrw !== null) ? diffPercent(p.upbitKrw, p.bithumbKrw) : null,
-          upbit_binance_spot: (p.upbitKrw !== null && binanceSpotKrw !== null) ? diffPercent(p.upbitKrw, binanceSpotKrw) : null,
-          bithumb_binance_spot: (p.bithumbKrw !== null && binanceSpotKrw !== null) ? diffPercent(p.bithumbKrw, binanceSpotKrw) : null,
+          upbit_binance: (p.upbitKrw !== null && binanceSpotKrw !== null) ? diffPercent(p.upbitKrw, binanceSpotKrw) : null,
+          bithumb_binance: (p.bithumbKrw !== null && binanceSpotKrw !== null) ? diffPercent(p.bithumbKrw, binanceSpotKrw) : null,
+          upbit_bybit: (p.upbitKrw !== null && bybitSpotKrw !== null) ? diffPercent(p.upbitKrw, bybitSpotKrw) : null,
+          bithumb_bybit: (p.bithumbKrw !== null && bybitSpotKrw !== null) ? diffPercent(p.bithumbKrw, bybitSpotKrw) : null,
+          binance_bybit: (binanceSpotKrw !== null && bybitSpotKrw !== null) ? diffPercent(binanceSpotKrw, bybitSpotKrw) : null,
         };
 
-        if (diffs.upbit_bithumb !== null) updateDiffRow('upbit_bithumb', diffs.upbit_bithumb, threshold); else { document.getElementById('dUpbitBithumb').textContent='-'; document.getElementById('sUpbitBithumb').textContent='데이터없음'; document.getElementById('row-upbit_bithumb').className=''; }
-        if (diffs.upbit_binance_spot !== null) updateDiffRow('upbit_binance_spot', diffs.upbit_binance_spot, threshold); else { document.getElementById('dUpbitBinanceSpot').textContent='-'; document.getElementById('sUpbitBinanceSpot').textContent='데이터없음'; document.getElementById('row-upbit_binance_spot').className=''; }
-        if (diffs.bithumb_binance_spot !== null) updateDiffRow('bithumb_binance_spot', diffs.bithumb_binance_spot, threshold); else { document.getElementById('dBithumbBinanceSpot').textContent='-'; document.getElementById('sBithumbBinanceSpot').textContent='데이터없음'; document.getElementById('row-bithumb_binance_spot').className=''; }
+        Object.entries(diffs).forEach(([k,v]) => updateDiffRow(k,v,threshold));
 
         const ignoreGap = document.getElementById('ignoreSpotFuturesGap').checked;
-        const suppressAlerts = ignoreGap && spotFuturesGap !== null && spotFuturesGap >= gapThreshold;
+        const anyGapExceeded = [binanceGap, bybitGap].some(v => v !== null && v >= gapThreshold);
+        const hasAnyGapData = [binanceGap, bybitGap].some(v => v !== null);
+        const suppressAlerts = ignoreGap && anyGapExceeded;
 
         const gapNotice = document.getElementById('gapNotice');
         if (suppressAlerts) {
           gapNotice.style.display = 'block';
-          gapNotice.textContent = `알림 차단중: 바이낸스 현물/선물 차이 ${num(spotFuturesGap, 2)}% (기준 ${num(gapThreshold, 2)}%)`;
-        } else if (ignoreGap && spotFuturesGap === null) {
+          gapNotice.textContent = `알림 차단중: 선물/현물 괴리 기준 ${num(gapThreshold,2)}% 이상 감지`;
+        } else if (ignoreGap && !hasAnyGapData) {
           gapNotice.style.display = 'block';
-          gapNotice.textContent = '알림 차단조건(현물/선물 괴리)을 계산할 수 없어 차단을 적용하지 않습니다.';
+          gapNotice.textContent = '괴리 차단 계산 데이터를 얻지 못해 차단 미적용 상태입니다.';
         } else {
           gapNotice.style.display = 'none';
           gapNotice.textContent = '';
         }
 
-        const triggered = Object.entries(diffs)
-          .filter(([, value]) => value !== null && value >= threshold)
-          .map(([pair, diff]) => ({ pair, diff }));
+        const triggered = Object.entries(diffs).filter(([,v]) => v !== null && v >= threshold).map(([pair,diff]) => ({pair,diff}));
 
         if (!suppressAlerts && triggered.length > 0) {
-          const msgPrefix = `UPBIT:${symbols.upbit} / BITHUMB:${symbols.bithumb} / BINANCE:${symbols.binance}`;
+          const msgPrefix = `UPBIT:${symbols.upbit} / BITHUMB:${symbols.bithumb} / BINANCE:${symbols.binance} / BYBIT:${symbols.bybit}`;
           const msg = `${msgPrefix} | ` + triggered.map(x => `${x.pair}: ${num(x.diff, 2)}%`).join(' | ');
           const now = Date.now() / 1000;
-
           if (document.getElementById('webAlertToggle').checked && (now - lastWebAlertAt >= cooldownSec)) {
             lastWebAlertAt = now;
             notifyWeb(`임계값 초과! ${msg}`);
           }
-
           if (document.getElementById('tgToggle').checked && (now - lastTelegramAlertAt >= cooldownSec)) {
             lastTelegramAlertAt = now;
             sendTelegram(`[가격차 알림]\n${msg}`).catch(err => showToast(err.message));
           }
         }
+
         if (p.errors && p.errors.length) {
           const log = document.getElementById('errorLog');
           log.textContent = `${new Date().toLocaleTimeString()} ${p.errors.join(' | ')}\n` + log.textContent;
