@@ -31,6 +31,7 @@
       <button id="stopBtn">중지</button>
       <button id="webTestBtn">웹 알림 테스트</button>
       <button id="tgTestBtn">텔레그램 테스트</button>
+      <label>알람소리 <input id="alertVolume" type="range" min="0" max="100" step="1" value="18"></label>
       <span id="statusText" class="muted">상태: 중지</span>
     </div>
     <hr />
@@ -120,11 +121,12 @@
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
+      const vol = Number(document.getElementById('alertVolume')?.value || 18) / 100;
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.frequency.value = 880;
       osc.type = 'sine';
-      gain.gain.setValueAtTime(0.18, ctx.currentTime);
+      gain.gain.setValueAtTime(Math.max(0, Math.min(1, vol)), ctx.currentTime);
       osc.start();
       osc.stop(ctx.currentTime + 0.22);
     }
