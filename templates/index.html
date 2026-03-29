@@ -162,10 +162,10 @@
 
     function currentSymbols() {
       return {
-        upbit: (document.getElementById('tickerUpbit').value || 'BTC').trim().toUpperCase(),
-        bithumb: (document.getElementById('tickerBithumb').value || 'BTC').trim().toUpperCase(),
-        binance: (document.getElementById('tickerBinance').value || 'BTC').trim().toUpperCase(),
-        bybit: (document.getElementById('tickerBybit').value || 'BTC').trim().toUpperCase(),
+        upbit: (document.getElementById('tickerUpbit').value || '').trim().toUpperCase(),
+        bithumb: (document.getElementById('tickerBithumb').value || '').trim().toUpperCase(),
+        binance: (document.getElementById('tickerBinance').value || '').trim().toUpperCase(),
+        bybit: (document.getElementById('tickerBybit').value || '').trim().toUpperCase(),
       };
     }
 
@@ -179,10 +179,10 @@
     }
 
     function syncTickerLabel(symbols) {
-      document.querySelectorAll('.tickerUpbitText').forEach(el => { el.textContent = symbols.upbit; });
-      document.querySelectorAll('.tickerBithumbText').forEach(el => { el.textContent = symbols.bithumb; });
-      document.querySelectorAll('.tickerBinanceText').forEach(el => { el.textContent = symbols.binance; });
-      document.querySelectorAll('.tickerBybitText').forEach(el => { el.textContent = symbols.bybit; });
+      document.querySelectorAll('.tickerUpbitText').forEach(el => { el.textContent = symbols.upbit || '-'; });
+      document.querySelectorAll('.tickerBithumbText').forEach(el => { el.textContent = symbols.bithumb || '-'; });
+      document.querySelectorAll('.tickerBinanceText').forEach(el => { el.textContent = symbols.binance || '-'; });
+      document.querySelectorAll('.tickerBybitText').forEach(el => { el.textContent = symbols.bybit || '-'; });
     }
 
     function updateDiffRow(key, value, threshold) {
@@ -242,19 +242,24 @@
       const binanceNum = parseMaybeNumber(symbols.binance);
       const bybitNum = parseMaybeNumber(symbols.bybit);
 
-      const upbitMarket = `KRW-${symbols.upbit}`;
-      const bithumbMarket = `${symbols.bithumb}_KRW`;
-      const binanceSymbol = `${symbols.binance}USDT`;
-      const bybitSymbol = `${symbols.bybit}USDT`;
+      const hasUpbitSymbol = symbols.upbit.length > 0;
+      const hasBithumbSymbol = symbols.bithumb.length > 0;
+      const hasBinanceSymbol = symbols.binance.length > 0;
+      const hasBybitSymbol = symbols.bybit.length > 0;
+
+      const upbitMarket = hasUpbitSymbol ? `KRW-${symbols.upbit}` : '';
+      const bithumbMarket = hasBithumbSymbol ? `${symbols.bithumb}_KRW` : '';
+      const binanceSymbol = hasBinanceSymbol ? `${symbols.binance}USDT` : '';
+      const bybitSymbol = hasBybitSymbol ? `${symbols.bybit}USDT` : '';
 
       const [upbitTicker, upbitUsdt, bithumb, binanceSpot, binanceFutures, bybitSpot, bybitFutures] = await Promise.all([
-        (enabled.upbit && upbitNum === null) ? safeFetchJson(`https://api.upbit.com/v1/ticker?markets=${upbitMarket}`) : Promise.resolve(null),
-        enabled.upbit ? safeFetchJson('https://api.upbit.com/v1/ticker?markets=KRW-USDT') : Promise.resolve(null),
-        (enabled.bithumb && bithumbNum === null) ? safeFetchJson(`https://api.bithumb.com/public/ticker/${bithumbMarket}`) : Promise.resolve(null),
-        (enabled.binance && binanceNum === null) ? safeFetchJson(`https://api.binance.com/api/v3/ticker/price?symbol=${binanceSymbol}`) : Promise.resolve(null),
-        (enabled.binance && binanceNum === null) ? safeFetchJson(`https://fapi.binance.com/fapi/v2/ticker/price?symbol=${binanceSymbol}`) : Promise.resolve(null),
-        (enabled.bybit && bybitNum === null) ? safeFetchJson(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${bybitSymbol}`) : Promise.resolve(null),
-        (enabled.bybit && bybitNum === null) ? safeFetchJson(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${bybitSymbol}`) : Promise.resolve(null),
+        (enabled.upbit && hasUpbitSymbol && upbitNum === null) ? safeFetchJson(`https://api.upbit.com/v1/ticker?markets=${upbitMarket}`) : Promise.resolve(null),
+        (enabled.upbit && hasUpbitSymbol) ? safeFetchJson('https://api.upbit.com/v1/ticker?markets=KRW-USDT') : Promise.resolve(null),
+        (enabled.bithumb && hasBithumbSymbol && bithumbNum === null) ? safeFetchJson(`https://api.bithumb.com/public/ticker/${bithumbMarket}`) : Promise.resolve(null),
+        (enabled.binance && hasBinanceSymbol && binanceNum === null) ? safeFetchJson(`https://api.binance.com/api/v3/ticker/price?symbol=${binanceSymbol}`) : Promise.resolve(null),
+        (enabled.binance && hasBinanceSymbol && binanceNum === null) ? safeFetchJson(`https://fapi.binance.com/fapi/v2/ticker/price?symbol=${binanceSymbol}`) : Promise.resolve(null),
+        (enabled.bybit && hasBybitSymbol && bybitNum === null) ? safeFetchJson(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${bybitSymbol}`) : Promise.resolve(null),
+        (enabled.bybit && hasBybitSymbol && bybitNum === null) ? safeFetchJson(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${bybitSymbol}`) : Promise.resolve(null),
       ]);
 
       const result = {
@@ -291,13 +296,13 @@
         result.bybitFuturesUsdt = parseBybitPrice(bybitFutures);
       }
 
-      if (enabled.upbit && result.usdtKrw === null) result.errors.push('업비트 KRW-USDT 조회실패');
-      if (enabled.upbit && upbitNum === null && result.upbitKrw === null) result.errors.push(`업비트 ${upbitMarket} 미지원/조회실패`);
-      if (enabled.bithumb && bithumbNum === null && result.bithumbKrw === null) result.errors.push(`빗썸 ${bithumbMarket} 미지원/조회실패`);
-      if (enabled.binance && binanceNum === null && result.binanceSpotUsdt === null) result.errors.push(`바이낸스 현물 ${binanceSymbol} 미지원/조회실패`);
-      if (enabled.binance && binanceNum === null && result.binanceFuturesUsdt === null) result.errors.push(`바이낸스 선물 ${binanceSymbol} 미지원/조회실패`);
-      if (enabled.bybit && bybitNum === null && result.bybitSpotUsdt === null) result.errors.push(`바이비트 현물 ${bybitSymbol} 미지원/조회실패`);
-      if (enabled.bybit && bybitNum === null && result.bybitFuturesUsdt === null) result.errors.push(`바이비트 선물 ${bybitSymbol} 미지원/조회실패`);
+      if (enabled.upbit && hasUpbitSymbol && result.usdtKrw === null) result.errors.push('업비트 KRW-USDT 조회실패');
+      if (enabled.upbit && hasUpbitSymbol && upbitNum === null && result.upbitKrw === null) result.errors.push(`업비트 ${upbitMarket} 미지원/조회실패`);
+      if (enabled.bithumb && hasBithumbSymbol && bithumbNum === null && result.bithumbKrw === null) result.errors.push(`빗썸 ${bithumbMarket} 미지원/조회실패`);
+      if (enabled.binance && hasBinanceSymbol && binanceNum === null && result.binanceSpotUsdt === null) result.errors.push(`바이낸스 현물 ${binanceSymbol} 미지원/조회실패`);
+      if (enabled.binance && hasBinanceSymbol && binanceNum === null && result.binanceFuturesUsdt === null) result.errors.push(`바이낸스 선물 ${binanceSymbol} 미지원/조회실패`);
+      if (enabled.bybit && hasBybitSymbol && bybitNum === null && result.bybitSpotUsdt === null) result.errors.push(`바이비트 현물 ${bybitSymbol} 미지원/조회실패`);
+      if (enabled.bybit && hasBybitSymbol && bybitNum === null && result.bybitFuturesUsdt === null) result.errors.push(`바이비트 선물 ${bybitSymbol} 미지원/조회실패`);
 
       return result;
     }
