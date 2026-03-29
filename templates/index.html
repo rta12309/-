@@ -47,6 +47,9 @@
       <label>조회주기(초) <input id="interval" type="number" min="3" value="5"></label>
       <label>쿨다운(초) <input id="cooldown" type="number" min="10" value="300"></label>
       <label>현물/선물 괴리 차단값(%) <input id="gapThreshold" type="number" step="0.1" min="0.1" value="2"></label>
+      <label>상한 알림가(USDT) <input id="priceAlertHigh" type="number" step="0.0001" placeholder="예: 1.5"></label>
+      <label>하한 알림가(USDT) <input id="priceAlertLow" type="number" step="0.0001" placeholder="예: 1.1"></label>
+      <label><input id="repeatPriceAlert" type="checkbox" checked> 가격조건 계속 알림</label>
       <label><input id="webAlertToggle" type="checkbox" checked> 웹 알림 ON</label>
       <label><input id="tgToggle" type="checkbox"> 텔레그램 ON</label>
       <label><input id="ignoreSpotFuturesGap" type="checkbox"> 선물/현물 괴리 차단 ON</label>
@@ -320,6 +323,9 @@
         const threshold = Number(document.getElementById('threshold').value || 5);
         const cooldownSec = Number(document.getElementById('cooldown').value || 300);
         const gapThreshold = Number(document.getElementById('gapThreshold').value || 2);
+        const highPrice = Number(document.getElementById('priceAlertHigh').value || 0);
+        const lowPrice = Number(document.getElementById('priceAlertLow').value || 0);
+        const repeatPriceAlert = document.getElementById('repeatPriceAlert').checked;
 
         const p = await getPrices(symbols, enabled);
         const binanceSpotKrw = (p.binanceSpotUsdt !== null && p.usdtKrw !== null) ? p.binanceSpotUsdt * p.usdtKrw : null;
@@ -370,6 +376,18 @@
 
         const triggered = Object.entries(diffs).filter(([,v]) => v !== null && v >= threshold).map(([pair,diff]) => ({pair,diff}));
 
+        // 특정 가격 이상/이하 경고: 대표 달러가격(바이낸스 현물, 없으면 바이비트 현물) 사용
+        const refUsdtPrice = p.binanceSpotUsdt !== null ? p.binanceSpotUsdt : p.bybitSpotUsdt;
+        const priceTriggered = [];
+        if (refUsdtPrice !== null) {
+          if (highPrice > 0 && refUsdtPrice >= highPrice) {
+            priceTriggered.push(`상한도달 ${num(refUsdtPrice, 6)} >= ${num(highPrice, 6)} USDT`);
+          }
+          if (lowPrice > 0 && refUsdtPrice <= lowPrice) {
+            priceTriggered.push(`하한도달 ${num(refUsdtPrice, 6)} <= ${num(lowPrice, 6)} USDT`);
+          }
+        }
+
         if (!suppressAlerts && triggered.length > 0) {
           const msgPrefix = `UPBIT:${symbols.upbit} / BITHUMB:${symbols.bithumb} / BINANCE:${symbols.binance} / BYBIT:${symbols.bybit}`;
           const msg = `${msgPrefix} | ` + triggered.map(x => `${x.pair}: ${num(x.diff, 2)}%`).join(' | ');
@@ -381,6 +399,22 @@
           if (document.getElementById('tgToggle').checked && (now - lastTelegramAlertAt >= cooldownSec)) {
             lastTelegramAlertAt = now;
             sendTelegram(`[가격차 알림]\n${msg}`).catch(err => showToast(err.message));
+          }
+        }
+
+        // 가격 조건 알림: 체크시 조회주기마다 계속 알림 가능
+        if (priceTriggered.length > 0 && !suppressAlerts) {
+          const pmsg = `가격조건 알림(${symbols.binance}/${symbols.bybit}): ` + priceTriggered.join(' | ');
+          const now = Date.now() / 1000;
+          const canWeb = repeatPriceAlert || (now - lastWebAlertAt >= cooldownSec);
+          const canTg = repeatPriceAlert || (now - lastTelegramAlertAt >= cooldownSec);
+          if (document.getElementById('webAlertToggle').checked && canWeb) {
+            if (!repeatPriceAlert) lastWebAlertAt = now;
+            notifyWeb(pmsg);
+          }
+          if (document.getElementById('tgToggle').checked && canTg) {
+            if (!repeatPriceAlert) lastTelegramAlertAt = now;
+            sendTelegram(`[가격 조건 알림]\n${pmsg}`).catch(err => showToast(err.message));
           }
         }
 
