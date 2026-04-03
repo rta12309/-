@@ -192,7 +192,8 @@
     <section class="panel">
       <div class="right-wrap">
         <section>
-          <h3>회원명단</h3>
+          <h3 style="display:flex;align-items:center;gap:8px;">회원명단 <button id="toggleMemberSectionBtn">접기</button></h3>
+          <div id="memberSectionBody">
           <input id="memberSearch" class="name-input" placeholder="회원 이름 검색" />
           <div class="member-form">
             <input id="studentId" placeholder="학번" />
@@ -209,6 +210,7 @@
               </thead>
               <tbody id="memberTableBody"></tbody>
             </table>
+          </div>
           </div>
         </section>
 
@@ -234,9 +236,11 @@
 
   <script>
     const STORAGE_KEY = "diva-fee-manager-v2";
+    const PREVIOUS_FOLDER_ID = "system-previous-payments";
 
     const defaultState = {
       folders: [
+        { id: PREVIOUS_FOLDER_ID, name: "이전 납부 명단", payers: [], expanded: false, locked: true },
         { id: crypto.randomUUID(), name: "2026-1학기", payers: [], expanded: true },
         { id: crypto.randomUUID(), name: "2026-2학기", payers: [], expanded: false }
       ],
@@ -252,6 +256,8 @@
     const statsEl = document.getElementById("stats");
     const memberSearchEl = document.getElementById("memberSearch");
     const transferBoxEl = document.getElementById("transferBox");
+    const toggleMemberSectionBtn = document.getElementById("toggleMemberSectionBtn");
+    const memberSectionBody = document.getElementById("memberSectionBody");
     let memberSearchKeyword = "";
 
     document.getElementById("addFolderBtn").addEventListener("click", () => {
@@ -265,6 +271,11 @@
     memberSearchEl.addEventListener("input", () => {
       memberSearchKeyword = memberSearchEl.value.trim().toLowerCase();
       renderMembers();
+    });
+    toggleMemberSectionBtn.addEventListener("click", () => {
+      const isHidden = memberSectionBody.style.display === "none";
+      memberSectionBody.style.display = isHidden ? "" : "none";
+      toggleMemberSectionBtn.textContent = isHidden ? "접기" : "펼치기";
     });
     [document.getElementById("studentId"), document.getElementById("memberName"), document.getElementById("phone"), document.getElementById("major")]
       .forEach((input) => {
@@ -287,7 +298,8 @@
                 id: f.id || crypto.randomUUID(),
                 name: typeof f.name === "string" ? f.name : `학기 ${i + 1}`,
                 payers: normalizePayers(f),
-                expanded: !!f.expanded
+                expanded: !!f.expanded,
+                locked: f.id === PREVIOUS_FOLDER_ID || !!f.locked
               }))
             : structuredClone(defaultState.folders),
           members: Array.isArray(parsed.members)
@@ -302,6 +314,17 @@
       } catch {
         return structuredClone(defaultState);
       }
+    }
+
+    function ensurePreviousFolder() {
+      let folder = state.folders.find((f) => f.id === PREVIOUS_FOLDER_ID);
+      if (!folder) {
+        folder = { id: PREVIOUS_FOLDER_ID, name: "이전 납부 명단", payers: [], expanded: false, locked: true };
+        state.folders.unshift(folder);
+      }
+      folder.name = "이전 납부 명단";
+      folder.locked = true;
+      return folder;
     }
 
     function normalizePayers(folderData) {
@@ -375,23 +398,25 @@
         wrapper.className = `folder ${folder.expanded ? "expanded" : ""}`;
         const upDisabled = index === 0 ? "disabled" : "";
         const downDisabled = index === state.folders.length - 1 ? "disabled" : "";
+        const locked = !!folder.locked;
+        const lockDisabled = locked ? "disabled" : "";
 
         wrapper.innerHTML = `
           <div class="folder-head">
             <button data-action="toggle" data-index="${index}">${folder.expanded ? "닫기" : "열기"}</button>
-            <input class="name-input" data-action="rename" data-index="${index}" value="${escapeHtml(folder.name)}" />
+            <input class="name-input" data-action="rename" data-index="${index}" value="${escapeHtml(folder.name)}" ${lockDisabled} />
             <div class="controls">
-              <button data-action="up" data-index="${index}" ${upDisabled}>↑</button>
-              <button data-action="down" data-index="${index}" ${downDisabled}>↓</button>
-              <button class="danger" data-action="remove" data-index="${index}">삭제</button>
+              <button data-action="up" data-index="${index}" ${upDisabled} ${lockDisabled}>↑</button>
+              <button data-action="down" data-index="${index}" ${downDisabled} ${lockDisabled}>↓</button>
+              <button class="danger" data-action="remove" data-index="${index}" ${lockDisabled}>삭제</button>
             </div>
           </div>
           <div class="folder-body">
             <div class="pay-input-row">
-              <input class="name-input" data-action="payer-input" data-index="${index}" placeholder="납부자 이름 입력 후 Enter" />
-              <button data-action="add-payer" data-index="${index}">추가</button>
+              <input class="name-input" data-action="payer-input" data-index="${index}" placeholder="납부자 이름 입력 후 Enter" ${lockDisabled} />
+              <button data-action="add-payer" data-index="${index}" ${lockDisabled}>추가</button>
             </div>
-            <div class="hint">입력 즉시 저장이 아니라 Enter 키(또는 추가 버튼)로 저장됩니다.</div>
+            <div class="hint">${locked ? "엑셀 붙여넣기(G열 납부횟수)로 자동 반영되는 시스템 폴더입니다." : "입력 즉시 저장이 아니라 Enter 키(또는 추가 버튼)로 저장됩니다."}</div>
             <ul class="payer-list">${folder.payers.map((name, i) => {
               const hasMember = !!getMemberByName(name);
               return `<li class="payer-item">
@@ -503,7 +528,8 @@
           id: f.id,
           name: f.name,
           payers: f.payers,
-          expanded: f.expanded
+          expanded: f.expanded,
+          locked: !!f.locked
         })),
         members: state.members
       };
@@ -546,7 +572,8 @@
               id: f.id || crypto.randomUUID(),
               name: typeof f.name === "string" ? f.name : `학기 ${i + 1}`,
               payers: normalizePayers(f),
-              expanded: !!f.expanded
+              expanded: !!f.expanded,
+              locked: f.id === PREVIOUS_FOLDER_ID || !!f.locked
             }))
           : [];
         state.members = Array.isArray(portable.members)
@@ -568,19 +595,27 @@
         .filter((cells) => cells.length >= 4);
 
       if (!parsedRows.length) {
-        alert("붙여넣기 형식을 인식하지 못했습니다. 세이브 문자열 또는 엑셀 4열(C~F) 데이터를 확인해주세요.");
+        alert("붙여넣기 형식을 인식하지 못했습니다. 세이브 문자열 또는 엑셀 4~5열(C~F, 선택 G:이전 납부횟수) 데이터를 확인해주세요.");
         return;
       }
 
-      for (const [studentId, name, phone, major] of parsedRows) {
+      const previousFolder = ensurePreviousFolder();
+      const previousPayers = [];
+      for (const [studentId, name, phone, major, previousCountRaw] of parsedRows) {
         if (!name) continue;
         const idx = state.members.findIndex((m) => m.name === name);
         const payload = { studentId: studentId || "", name, phone: phone || "", major: major || "" };
         if (idx >= 0) state.members[idx] = payload;
         else state.members.push(payload);
+
+        const previousCount = Number.parseInt(previousCountRaw || "0", 10);
+        if (Number.isFinite(previousCount) && previousCount > 0) {
+          for (let i = 0; i < previousCount; i += 1) previousPayers.push(name);
+        }
       }
+      previousFolder.payers = previousPayers;
       saveAndRender();
-      alert("엑셀 붙여넣기 데이터를 회원명단에 반영했습니다.");
+      alert("엑셀 붙여넣기 데이터를 회원명단에 반영했고, G열 숫자로 이전 납부 명단을 갱신했습니다.");
     }
 
     folderListEl.addEventListener("click", (e) => {
@@ -601,8 +636,10 @@
 
       if (action === "up" || action === "down") {
         if (Number.isNaN(index)) return;
+        if (state.folders[index].locked) return;
         const to = action === "up" ? index - 1 : index + 1;
         if (to < 0 || to >= state.folders.length) return;
+        if (state.folders[to].locked) return;
         [state.folders[index], state.folders[to]] = [state.folders[to], state.folders[index]];
         saveAndRender();
         return;
@@ -610,6 +647,7 @@
 
       if (action === "remove") {
         if (Number.isNaN(index)) return;
+        if (state.folders[index].locked) return;
         if (!confirm(`'${state.folders[index].name}' 폴더를 삭제할까요?`)) return;
         state.folders.splice(index, 1);
         saveAndRender();
@@ -618,6 +656,7 @@
 
       if (action === "add-payer") {
         if (Number.isNaN(index)) return;
+        if (state.folders[index].locked) return;
         const input = folderListEl.querySelector(`input[data-action='payer-input'][data-index='${index}']`);
         if (!input) return;
         const name = input.value.trim();
@@ -631,6 +670,7 @@
 
       if (action === "remove-payer") {
         if (Number.isNaN(index) || Number.isNaN(payerIndex)) return;
+        if (state.folders[index].locked) return;
         state.folders[index].payers.splice(payerIndex, 1);
         saveAndRender();
         return;
@@ -658,6 +698,7 @@
       e.preventDefault();
       const index = Number(input.dataset.index);
       if (Number.isNaN(index)) return;
+      if (state.folders[index].locked) return;
       const name = input.value.trim();
       if (!name) return;
 
@@ -674,6 +715,7 @@
       const action = target.dataset.action;
       const index = Number(target.dataset.index);
       if (action === "rename" && !Number.isNaN(index)) {
+        if (state.folders[index].locked) return;
         state.folders[index].name = target.value;
         saveAndRender();
       }
@@ -708,6 +750,7 @@
     }
 
     function saveAndRender() {
+      ensurePreviousFolder();
       syncMembersFromPayers();
       saveState();
       renderFolders();
