@@ -233,6 +233,7 @@
     };
 
     const state = loadState();
+    let pendingFocusFolderId = null;
 
     const folderListEl = document.getElementById("folderList");
     const memberTableBody = document.getElementById("memberTableBody");
@@ -306,6 +307,16 @@
         .sort((a, b) => a.localeCompare(b, "ko"));
     }
 
+    function countPaymentsByName(name) {
+      let count = 0;
+      for (const folder of state.folders) {
+        for (const payer of folder.payers) {
+          if (payer === name) count += 1;
+        }
+      }
+      return count;
+    }
+
     function renderFolders() {
       folderListEl.innerHTML = "";
 
@@ -317,7 +328,7 @@
 
         wrapper.innerHTML = `
           <div class="folder-head">
-            <button data-action="toggle" data-index="${index}">${folder.expanded ? "−" : "+"}</button>
+            <button data-action="toggle" data-index="${index}">${folder.expanded ? "닫기" : "열기"}</button>
             <input class="name-input" data-action="rename" data-index="${index}" value="${escapeHtml(folder.name)}" />
             <div class="controls">
               <button data-action="up" data-index="${index}" ${upDisabled}>↑</button>
@@ -364,7 +375,7 @@
       memberTableBody.innerHTML = state.members.map((m, i) => `
         <tr>
           <td>${escapeHtml(m.studentId)}</td>
-          <td>${escapeHtml(m.name)}</td>
+          <td><button class="payer-name-btn link" data-action="show-member-from-table" data-member-index="${i}">${escapeHtml(m.name)}</button></td>
           <td>${escapeHtml(m.phone)}</td>
           <td>${escapeHtml(m.major)}</td>
           <td><button class="danger" data-action="delete-member" data-member-index="${i}">삭제</button></td>
@@ -409,8 +420,13 @@
 
     function showMemberInfoByName(name) {
       const member = getMemberByName(name);
+      const payCount = countPaymentsByName(name);
       if (!member) {
-        selectedInfo.textContent = `"${name}" 이름의 회원정보가 회원명단에 없습니다.`;
+        selectedInfo.innerHTML = `
+          <strong>${escapeHtml(name)}</strong><br>
+          회원명단 정보: 없음<br>
+          회비 납부 횟수: ${payCount}회
+        `;
         return;
       }
 
@@ -418,7 +434,8 @@
         <strong>${escapeHtml(member.name)}</strong><br>
         학번: ${escapeHtml(member.studentId) || "-"}<br>
         전화번호: ${escapeHtml(member.phone) || "-"}<br>
-        학과: ${escapeHtml(member.major) || "-"}
+        학과: ${escapeHtml(member.major) || "-"}<br>
+        회비 납부 횟수: ${payCount}회
       `;
     }
 
@@ -463,6 +480,7 @@
         if (!name) return;
         state.folders[index].payers.push(name);
         input.value = "";
+        pendingFocusFolderId = state.folders[index].id;
         saveAndRender();
         return;
       }
@@ -501,6 +519,7 @@
 
       state.folders[index].payers.push(name);
       input.value = "";
+      pendingFocusFolderId = state.folders[index].id;
       saveAndRender();
     });
 
@@ -517,6 +536,16 @@
     });
 
     memberTableBody.addEventListener("click", (e) => {
+      const detailBtn = e.target.closest("button[data-action='show-member-from-table']");
+      if (detailBtn) {
+        const index = Number(detailBtn.dataset.memberIndex);
+        if (Number.isNaN(index)) return;
+        const target = state.members[index];
+        if (!target) return;
+        showMemberInfoByName(target.name);
+        return;
+      }
+
       const btn = e.target.closest("button[data-action='delete-member']");
       if (!btn) return;
       const index = Number(btn.dataset.memberIndex);
@@ -539,6 +568,15 @@
       renderFolders();
       renderMembers();
       renderStats();
+
+      if (pendingFocusFolderId) {
+        const idx = state.folders.findIndex(f => f.id === pendingFocusFolderId);
+        if (idx >= 0) {
+          const input = folderListEl.querySelector(`input[data-action='payer-input'][data-index='${idx}']`);
+          if (input) input.focus();
+        }
+        pendingFocusFolderId = null;
+      }
     }
 
     saveAndRender();
