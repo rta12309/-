@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DIVA 회비 납부 관리</title>
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --card: #fff;
+      --line: #dbe1ef;
+      --text: #111827;
+      --muted: #6b7280;
+      --primary: #4f46e5;
+      --danger: #dc2626;
+      --success: #059669;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Pretendard", "Noto Sans KR", Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    header {
+      padding: 14px 20px;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    h1 { margin: 0; font-size: 20px; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 14px;
+      padding: 14px;
+      min-height: calc(100vh - 60px);
+    }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .head {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .head small { color: var(--muted); }
+    button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover { background: #f3f4f6; }
+    button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+    button.danger { color: var(--danger); border-color: #fecaca; }
+
+    .folder-list {
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: calc(100vh - 120px);
+      overflow: auto;
+    }
+    .folder {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      background: #fff;
+    }
+    .folder.done { border-color: #bbf7d0; background: #f0fdf4; }
+    .folder-head {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px;
+      border-bottom: 1px solid var(--line);
+    }
+    .folder.done .folder-head { border-bottom-color: #bbf7d0; }
+    .folder-body { display: none; padding: 8px; }
+    .folder.expanded .folder-body { display: block; }
+
+    .name-input, .member-form input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 7px 8px;
+      font-size: 14px;
+    }
+    .controls { display: flex; gap: 4px; }
+
+    .pay-input-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .hint { color: var(--muted); font-size: 12px; margin: 4px 0 8px; }
+    .payer-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 170px;
+      overflow: auto;
+    }
+    .payer-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      background: #fff;
+    }
+    .payer-name-btn {
+      border: none;
+      background: transparent;
+      padding: 0;
+      font-size: 14px;
+      text-align: left;
+      cursor: pointer;
+      color: var(--text);
+    }
+    .payer-name-btn.link { color: #2563eb; text-decoration: underline; }
+
+    .right-wrap {
+      display: grid;
+      gap: 12px;
+      padding: 12px;
+    }
+    .member-form {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr)) auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+
+    .info-box {
+      border: 1px solid #bfdbfe;
+      background: #eff6ff;
+      border-radius: 10px;
+      padding: 10px;
+      min-height: 96px;
+    }
+    .info-box strong { color: #1e40af; }
+
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      .folder-list { max-height: none; }
+      .member-form { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+    <h1>DIVA 동아리 회비 납부 관리</h1>
+    <button id="resetAfterSaveBtn" class="danger">저장후 초기화</button>
+  </header>
+
+  <main class="layout">
+    <section class="panel">
+      <div class="head">
+        <div>
+          <strong>학기 폴더</strong><br />
+          <small>이름 입력 후 Enter 키를 누르면 저장됩니다.</small>
+        </div>
+        <button id="addFolderBtn" class="primary">+ 폴더 추가</button>
+      </div>
+      <div class="folder-list" id="folderList"></div>
+    </section>
+
+    <section class="panel">
+      <div class="right-wrap">
+        <section>
+          <h3 style="display:flex;align-items:center;gap:8px;">회원명단 <button id="toggleMemberSectionBtn">접기</button></h3>
+          <input id="memberSearch" class="name-input" placeholder="회원 이름 검색" style="margin:10px 0 14px;" />
+          <div id="collapsedSearchResults" class="hint" style="display:none;margin-bottom:12px;"></div>
+          <div class="member-form">
+            <input id="studentId" placeholder="학번" />
+            <input id="memberName" placeholder="이름" />
+            <input id="phone" placeholder="전화번호" />
+            <input id="major" placeholder="학과" />
+            <button id="saveMemberBtn" class="primary">회원 저장</button>
+          </div>
+          <div id="memberFoldArea">
+          <p class="hint">같은 이름이 있으면 최신 정보로 덮어씁니다.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>학번</th><th>이름</th><th>전화번호</th><th>학과</th><th>관리</th></tr>
+              </thead>
+              <tbody id="memberTableBody"></tbody>
+            </table>
+          </div>
+          </div>
+        </section>
+
+        <section>
+          <h3>선택한 납부자 회원정보</h3>
+          <div id="selectedInfo" class="info-box">납부자 이름을 클릭하면 회원정보를 표시합니다.</div>
+        </section>
+
+        <section id="stats"></section>
+
+        <section>
+          <h3>데이터 내보내기 / 붙여넣기 가져오기</h3>
+          <div class="controls" style="margin-bottom:8px;">
+            <button id="copySaveBtn">세이브파일 복사</button>
+            <button id="applyPasteBtn" class="primary">붙여넣기 데이터 적용</button>
+          </div>
+          <textarea id="transferBox" style="width:100%;min-height:130px;border:1px solid var(--line);border-radius:8px;padding:8px;" placeholder="여기에 세이브 문자열 또는 엑셀(C:학번, D:이름, E:전화번호, F:학과) 복사 내용을 붙여넣으세요."></textarea>
+          <p class="hint">세이브파일 문자열을 복사해 다른 컴퓨터에 붙여넣어 동일한 상태를 불러올 수 있습니다. 엑셀 4열 복붙도 지원합니다.</p>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const STORAGE_KEY = "diva-fee-manager-v2";
+    const PREVIOUS_FOLDER_ID = "system-previous-payments";
+
+    const defaultState = {
+      folders: [
+        { id: PREVIOUS_FOLDER_ID, name: "이전 납부 명단", payers: [], expanded: false },
+        { id: crypto.randomUUID(), name: "2026-1학기", payers: [], expanded: true },
+        { id: crypto.randomUUID(), name: "2026-2학기", payers: [], expanded: false }
+      ],
+      members: []
+    };
+
+    const state = loadState();
+    let pendingFocusFolderId = null;
+
+    const folderListEl = document.getElementById("folderList");
+    const memberTableBody = document.getElementById("memberTableBody");
+    const selectedInfo = document.getElementById("selectedInfo");
+    const statsEl = document.getElementById("stats");
+    const memberSearchEl = document.getElementById("memberSearch");
+    const transferBoxEl = document.getElementById("transferBox");
+    const resetAfterSaveBtn = document.getElementById("resetAfterSaveBtn");
+    const toggleMemberSectionBtn = document.getElementById("toggleMemberSectionBtn");
+    const memberFoldArea = document.getElementById("memberFoldArea");
+    const collapsedSearchResultsEl = document.getElementById("collapsedSearchResults");
+    let memberSearchKeyword = "";
+
+    document.getElementById("addFolderBtn").addEventListener("click", () => {
+      state.folders.push({ id: crypto.randomUUID(), name: `새 학기 ${state.folders.length + 1}`, payers: [], expanded: true });
+      saveAndRender();
+    });
+
+    document.getElementById("saveMemberBtn").addEventListener("click", saveMemberFromForm);
+    document.getElementById("copySaveBtn").addEventListener("click", copySaveDataString);
+    document.getElementById("applyPasteBtn").addEventListener("click", applyPastedData);
+    resetAfterSaveBtn.addEventListener("click", saveAndResetAllData);
+    memberSearchEl.addEventListener("input", () => {
+      memberSearchKeyword = memberSearchEl.value.trim().toLowerCase();
+      renderMembers();
+    });
+    toggleMemberSectionBtn.addEventListener("click", () => {
+      const isHidden = memberFoldArea.style.display === "none";
+      memberFoldArea.style.display = isHidden ? "" : "none";
+      collapsedSearchResultsEl.style.display = isHidden ? "none" : "block";
+      toggleMemberSectionBtn.textContent = isHidden ? "접기" : "펼치기";
+      renderMembers();
+    });
+    [document.getElementById("studentId"), document.getElementById("memberName"), document.getElementById("phone"), document.getElementById("major")]
+      .forEach((input) => {
+        input.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter") return;
+          e.preventDefault();
+          saveMemberFromForm();
+        });
+      });
+
+    function loadState() {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return structuredClone(defaultState);
+
+      try {
+        const parsed = JSON.parse(raw);
+        return {
+          folders: Array.isArray(parsed.folders)
+            ? parsed.folders.map((f, i) => ({
+                id: f.id || crypto.randomUUID(),
+                name: typeof f.name === "string" ? f.name : `학기 ${i + 1}`,
+                payers: normalizePayers(f),
+                expanded: !!f.expanded
+              }))
+            : structuredClone(defaultState.folders),
+          members: Array.isArray(parsed.members)
+            ? parsed.members.map(m => ({
+                studentId: `${m.studentId || ""}`.trim(),
+                name: `${m.name || ""}`.trim(),
+                phone: `${m.phone || ""}`.trim(),
+                major: `${m.major || ""}`.trim()
+              })).filter(m => m.name)
+            : []
+        };
+      } catch {
+        return structuredClone(defaultState);
+      }
+    }
+
+    function ensurePreviousFolder() {
+      let folder = state.folders.find((f) => f.id === PREVIOUS_FOLDER_ID);
+      if (!folder) {
+        folder = { id: PREVIOUS_FOLDER_ID, name: "이전 납부 명단", payers: [], expanded: false };
+        state.folders.unshift(folder);
+      }
+      folder.name = "이전 납부 명단";
+      return folder;
+    }
+
+    function normalizePayers(folderData) {
+      if (Array.isArray(folderData.payers)) {
+        return folderData.payers.map(v => `${v}`.trim()).filter(Boolean);
+      }
+      if (typeof folderData.entries === "string") {
+        return folderData.entries.split("\n").map(v => v.trim()).filter(Boolean);
+      }
+      return [];
+    }
+
+    function saveState() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+
+    function getMemberByName(name) {
+      return state.members.find(m => m.name === name) || null;
+    }
+
+    function getCompleteMembers() {
+      const map = new Map();
+      for (const folder of state.folders) {
+        for (const name of folder.payers) {
+          map.set(name, (map.get(name) || 0) + 1);
+        }
+      }
+      return Array.from(map.entries())
+        .filter(([, count]) => count >= 5)
+        .map(([name]) => name)
+        .sort((a, b) => a.localeCompare(b, "ko"));
+    }
+
+    function countPaymentsByName(name) {
+      let count = 0;
+      for (const folder of state.folders) {
+        for (const payer of folder.payers) {
+          if (payer === name) count += 1;
+        }
+      }
+      return count;
+    }
+
+    function syncMembersFromPayers() {
+      const payerNames = new Set();
+      for (const folder of state.folders) {
+        for (const name of folder.payers) {
+          const trimmed = `${name}`.trim();
+          if (trimmed) payerNames.add(trimmed);
+        }
+      }
+
+      for (const name of payerNames) {
+        const exists = state.members.some((m) => m.name === name);
+        if (!exists) {
+          state.members.push({
+            studentId: "",
+            name,
+            phone: "",
+            major: ""
+          });
+        }
+      }
+    }
+
+    function renderFolders() {
+      folderListEl.innerHTML = "";
+
+      state.folders.forEach((folder, index) => {
+        const wrapper = document.createElement("article");
+        wrapper.className = `folder ${folder.expanded ? "expanded" : ""}`;
+        const upDisabled = index === 0 ? "disabled" : "";
+        const downDisabled = index === state.folders.length - 1 ? "disabled" : "";
+
+        wrapper.innerHTML = `
+          <div class="folder-head">
+            <button data-action="toggle" data-index="${index}">${folder.expanded ? "닫기" : "열기"}</button>
+            <input class="name-input" data-action="rename" data-index="${index}" value="${escapeHtml(folder.name)}" />
+            <div class="controls">
+              <button data-action="up" data-index="${index}" ${upDisabled}>↑</button>
+              <button data-action="down" data-index="${index}" ${downDisabled}>↓</button>
+              <button class="danger" data-action="remove" data-index="${index}">삭제</button>
+            </div>
+          </div>
+          <div class="folder-body">
+            <div class="pay-input-row">
+              <input class="name-input" data-action="payer-input" data-index="${index}" placeholder="납부자 이름 입력 후 Enter" />
+              <button data-action="add-payer" data-index="${index}">추가</button>
+            </div>
+            <div class="hint">입력 즉시 저장이 아니라 Enter 키(또는 추가 버튼)로 저장됩니다.</div>
+            <ul class="payer-list">${folder.payers.map((name, i) => {
+              const hasMember = !!getMemberByName(name);
+              return `<li class="payer-item">
+                <button class="payer-name-btn ${hasMember ? "link" : ""}" data-action="show-member" data-index="${index}" data-payer-index="${i}">${escapeHtml(name)}</button>
+                <button class="danger" data-action="remove-payer" data-index="${index}" data-payer-index="${i}">삭제</button>
+              </li>`;
+            }).join("")}</ul>
+          </div>
+        `;
+
+        folderListEl.appendChild(wrapper);
+      });
+
+      const complete = getCompleteMembers();
+      const done = document.createElement("article");
+      done.className = "folder done expanded";
+      done.innerHTML = `
+        <div class="folder-head">
+          <button disabled>✓</button>
+          <strong>완납자 명단 (5회 이상)</strong>
+          <div></div>
+        </div>
+        <div class="folder-body">
+          <ul class="payer-list">${complete.map(name => `<li class="payer-item"><button class="payer-name-btn ${getMemberByName(name) ? "link" : ""}" data-action="show-complete-member" data-name="${escapeHtml(name)}">${escapeHtml(name)}</button></li>`).join("") || "<li class='hint'>아직 없습니다.</li>"}</ul>
+        </div>
+      `;
+      folderListEl.appendChild(done);
+    }
+
+    function renderMembers() {
+      const filtered = state.members
+        .map((m, i) => ({ ...m, __idx: i }))
+        .filter((m) => !memberSearchKeyword || m.name.toLowerCase().includes(memberSearchKeyword));
+
+      memberTableBody.innerHTML = filtered.map((m) => `
+        <tr>
+          <td>${escapeHtml(m.studentId)}</td>
+          <td><button class="payer-name-btn link" data-action="show-member-from-table" data-member-index="${m.__idx}">${escapeHtml(m.name)}</button>${countPaymentsByName(m.name) >= 6 ? ' <span style="color:#dc2626;font-weight:700;">⚠ 6회+</span>' : ""}</td>
+          <td>${escapeHtml(m.phone)}</td>
+          <td>${escapeHtml(m.major)}</td>
+          <td><button class="danger" data-action="delete-member" data-member-index="${m.__idx}">삭제</button></td>
+        </tr>
+      `).join("");
+
+      if (memberFoldArea.style.display === "none") {
+        if (!memberSearchKeyword) {
+          collapsedSearchResultsEl.innerHTML = "";
+        } else if (!filtered.length) {
+          collapsedSearchResultsEl.innerHTML = "검색 결과가 없습니다.";
+        } else {
+          collapsedSearchResultsEl.innerHTML = filtered
+            .map((m) => `<button class="payer-name-btn link" data-action="show-member-by-name" data-name="${escapeHtml(m.name)}">${escapeHtml(m.name)}</button>${countPaymentsByName(m.name) >= 6 ? ' <span style="color:#dc2626;font-weight:700;">⚠ 6회+</span>' : ""}`)
+            .join("<br>");
+        }
+      }
+    }
+
+    function renderStats() {
+      const totalPayers = state.folders.reduce((sum, f) => sum + f.payers.length, 0);
+      const completeCount = getCompleteMembers().length;
+      statsEl.innerHTML = `
+        <h3>요약</h3>
+        <div class="hint">학기 폴더 수: <strong>${state.folders.length}</strong></div>
+        <div class="hint">전체 납부 입력 수(중복 포함): <strong>${totalPayers}</strong></div>
+        <div class="hint">완납자 수: <strong>${completeCount}</strong></div>
+      `;
+    }
+
+    function saveMemberFromForm() {
+      const studentId = document.getElementById("studentId").value.trim();
+      const name = document.getElementById("memberName").value.trim();
+      const phone = document.getElementById("phone").value.trim();
+      const major = document.getElementById("major").value.trim();
+
+      if (!name) {
+        alert("이름은 필수입니다.");
+        document.getElementById("memberName").focus();
+        return;
+      }
+
+      const idx = state.members.findIndex(m => m.name === name);
+      const payload = { studentId, name, phone, major };
+      if (idx >= 0) state.members[idx] = payload;
+      else state.members.push(payload);
+
+      document.getElementById("studentId").value = "";
+      document.getElementById("memberName").value = "";
+      document.getElementById("phone").value = "";
+      document.getElementById("major").value = "";
+      document.getElementById("studentId").focus();
+
+      saveAndRender();
+    }
+
+    function showMemberInfoByName(name) {
+      const member = getMemberByName(name);
+      const payCount = countPaymentsByName(name);
+      const warningHtml = payCount >= 6
+        ? `<br><span style="color:#dc2626;font-weight:700;">⚠️ 경고: 회비 납부 횟수가 6회 이상입니다.</span>`
+        : "";
+      if (!member) {
+        selectedInfo.innerHTML = `
+          <strong>${escapeHtml(name)}</strong><br>
+          회원명단 정보: 없음<br>
+          회비 납부 횟수: ${payCount}회
+          ${warningHtml}
+        `;
+        return;
+      }
+
+      selectedInfo.innerHTML = `
+        <strong>${escapeHtml(member.name)}</strong><br>
+        학번: ${escapeHtml(member.studentId) || "-"}<br>
+        전화번호: ${escapeHtml(member.phone) || "-"}<br>
+        학과: ${escapeHtml(member.major) || "-"}<br>
+        회비 납부 횟수: ${payCount}회
+        ${warningHtml}
+      `;
+    }
+
+    function getPortableSaveString() {
+      const payload = {
+        version: 1,
+        app: "diva-fee-manager",
+        folders: state.folders.map((f) => ({
+          id: f.id,
+          name: f.name,
+          payers: f.payers,
+          expanded: f.expanded
+        })),
+        members: state.members
+      };
+      return `DIVA1:${btoa(unescape(encodeURIComponent(JSON.stringify(payload))))}`;
+    }
+
+    function saveAndResetAllData() {
+      const backup = getPortableSaveString();
+      transferBoxEl.value = backup;
+      saveState();
+      if (navigator.clipboard?.writeText) navigator.clipboard.writeText(backup).catch(() => {});
+      if (!confirm("현재 상태를 저장 문자열로 보관한 뒤 초기화할까요?")) return;
+
+      state.folders = structuredClone(defaultState.folders);
+      state.members = [];
+      memberSearchKeyword = "";
+      memberSearchEl.value = "";
+      saveAndRender();
+      alert("저장 문자열을 생성한 뒤 초기화했습니다.");
+    }
+
+    function copySaveDataString() {
+      const data = getPortableSaveString();
+      transferBoxEl.value = data;
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(data).then(() => {
+          alert("세이브파일 문자열을 복사했습니다.");
+        }).catch(() => {
+          alert("복사는 실패했지만 아래 칸에 문자열이 채워졌습니다. 수동 복사해주세요.");
+        });
+        return;
+      }
+      transferBoxEl.focus();
+      transferBoxEl.select();
+      alert("아래 칸 문자열을 수동 복사해주세요.");
+    }
+
+    function decodePortableSaveString(text) {
+      if (!text.startsWith("DIVA1:")) return null;
+      const encoded = text.slice(6).trim();
+      const json = decodeURIComponent(escape(atob(encoded)));
+      const parsed = JSON.parse(json);
+      if (!parsed || parsed.app !== "diva-fee-manager") return null;
+      return parsed;
+    }
+
+    function applyPastedData() {
+      const raw = transferBoxEl.value.trim();
+      if (!raw) return;
+
+      const portable = decodePortableSaveString(raw);
+      if (portable) {
+        state.folders = Array.isArray(portable.folders)
+          ? portable.folders.map((f, i) => ({
+              id: f.id || crypto.randomUUID(),
+              name: typeof f.name === "string" ? f.name : `학기 ${i + 1}`,
+              payers: normalizePayers(f),
+              expanded: !!f.expanded
+            }))
+          : [];
+        state.members = Array.isArray(portable.members)
+          ? portable.members.map((m) => ({
+              studentId: `${m.studentId || ""}`.trim(),
+              name: `${m.name || ""}`.trim(),
+              phone: `${m.phone || ""}`.trim(),
+              major: `${m.major || ""}`.trim()
+            })).filter((m) => m.name)
+          : [];
+        saveAndRender();
+        alert("세이브파일을 불러왔습니다.");
+        return;
+      }
+
+      const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      const parsedRows = lines
+        .map((line) => line.split("\t").map((cell) => cell.trim()))
+        .filter((cells) => cells.length >= 4);
+
+      if (!parsedRows.length) {
+        alert("붙여넣기 형식을 인식하지 못했습니다. 세이브 문자열 또는 엑셀 4~5열(C~F, 선택 G:이전 납부횟수) 데이터를 확인해주세요.");
+        return;
+      }
+
+      const previousFolder = ensurePreviousFolder();
+      const previousPayers = [];
+      for (const [studentId, name, phone, major, previousCountRaw] of parsedRows) {
+        if (!name) continue;
+        const idx = state.members.findIndex((m) => m.name === name);
+        const payload = { studentId: studentId || "", name, phone: phone || "", major: major || "" };
+        if (idx >= 0) state.members[idx] = payload;
+        else state.members.push(payload);
+
+        const previousCount = Number.parseInt(previousCountRaw || "0", 10);
+        if (Number.isFinite(previousCount) && previousCount > 0) {
+          for (let i = 0; i < previousCount; i += 1) previousPayers.push(name);
+        }
+      }
+      previousFolder.payers = previousPayers;
+      saveAndRender();
+      alert("엑셀 붙여넣기 데이터를 회원명단에 반영했고, G열 숫자로 이전 납부 명단을 갱신했습니다.");
+    }
+
+    folderListEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-action]");
+      if (!btn) return;
+
+      const action = btn.dataset.action;
+      const index = Number(btn.dataset.index);
+      const payerIndex = Number(btn.dataset.payerIndex);
+
+      if (action === "toggle") {
+        if (!Number.isNaN(index)) {
+          state.folders[index].expanded = !state.folders[index].expanded;
+          saveAndRender();
+        }
+        return;
+      }
+
+      if (action === "up" || action === "down") {
+        if (Number.isNaN(index)) return;
+        const to = action === "up" ? index - 1 : index + 1;
+        if (to < 0 || to >= state.folders.length) return;
+        [state.folders[index], state.folders[to]] = [state.folders[to], state.folders[index]];
+        saveAndRender();
+        return;
+      }
+
+      if (action === "remove") {
+        if (Number.isNaN(index)) return;
+        if (!confirm(`'${state.folders[index].name}' 폴더를 삭제할까요?`)) return;
+        state.folders.splice(index, 1);
+        saveAndRender();
+        return;
+      }
+
+      if (action === "add-payer") {
+        if (Number.isNaN(index)) return;
+        const input = folderListEl.querySelector(`input[data-action='payer-input'][data-index='${index}']`);
+        if (!input) return;
+        const name = input.value.trim();
+        if (!name) return;
+        state.folders[index].payers.push(name);
+        input.value = "";
+        pendingFocusFolderId = state.folders[index].id;
+        saveAndRender();
+        return;
+      }
+
+      if (action === "remove-payer") {
+        if (Number.isNaN(index) || Number.isNaN(payerIndex)) return;
+        state.folders[index].payers.splice(payerIndex, 1);
+        saveAndRender();
+        return;
+      }
+
+      if (action === "show-member") {
+        if (Number.isNaN(index) || Number.isNaN(payerIndex)) return;
+        const name = state.folders[index].payers[payerIndex];
+        showMemberInfoByName(name);
+        return;
+      }
+
+      if (action === "show-complete-member") {
+        const name = btn.dataset.name || "";
+        showMemberInfoByName(name);
+      }
+    });
+
+    folderListEl.addEventListener("keydown", (e) => {
+      const input = e.target;
+      if (!(input instanceof HTMLInputElement)) return;
+      if (input.dataset.action !== "payer-input") return;
+      if (e.key !== "Enter") return;
+
+      e.preventDefault();
+      const index = Number(input.dataset.index);
+      if (Number.isNaN(index)) return;
+      const name = input.value.trim();
+      if (!name) return;
+
+      state.folders[index].payers.push(name);
+      input.value = "";
+      pendingFocusFolderId = state.folders[index].id;
+      saveAndRender();
+    });
+
+    folderListEl.addEventListener("change", (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLInputElement)) return;
+
+      const action = target.dataset.action;
+      const index = Number(target.dataset.index);
+      if (action === "rename" && !Number.isNaN(index)) {
+        state.folders[index].name = target.value;
+        saveAndRender();
+      }
+    });
+
+    memberTableBody.addEventListener("click", (e) => {
+      const detailBtn = e.target.closest("button[data-action='show-member-from-table']");
+      if (detailBtn) {
+        const index = Number(detailBtn.dataset.memberIndex);
+        if (Number.isNaN(index)) return;
+        const target = state.members[index];
+        if (!target) return;
+        showMemberInfoByName(target.name);
+        return;
+      }
+
+      const btn = e.target.closest("button[data-action='delete-member']");
+      if (!btn) return;
+      const index = Number(btn.dataset.memberIndex);
+      if (Number.isNaN(index)) return;
+      state.members.splice(index, 1);
+      saveAndRender();
+    });
+
+    collapsedSearchResultsEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-action='show-member-by-name']");
+      if (!btn) return;
+      const name = btn.dataset.name || "";
+      if (!name) return;
+      showMemberInfoByName(name);
+    });
+
+    function escapeHtml(str) {
+      return `${str}`
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function saveAndRender() {
+      ensurePreviousFolder();
+      syncMembersFromPayers();
+      saveState();
+      renderFolders();
+      renderMembers();
+      renderStats();
+
+      if (pendingFocusFolderId) {
+        const idx = state.folders.findIndex(f => f.id === pendingFocusFolderId);
+        if (idx >= 0) {
+          const input = folderListEl.querySelector(`input[data-action='payer-input'][data-index='${idx}']`);
+          if (input) input.focus();
+        }
+        pendingFocusFolderId = null;
+      }
+    }
+
+    saveAndRender();
+  </script>
+</body>
+</html>
