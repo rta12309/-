@@ -246,6 +246,14 @@
     });
 
     document.getElementById("saveMemberBtn").addEventListener("click", saveMemberFromForm);
+    [document.getElementById("studentId"), document.getElementById("memberName"), document.getElementById("phone"), document.getElementById("major")]
+      .forEach((input) => {
+        input.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter") return;
+          e.preventDefault();
+          saveMemberFromForm();
+        });
+      });
 
     function loadState() {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -402,6 +410,7 @@
 
       if (!name) {
         alert("이름은 필수입니다.");
+        document.getElementById("memberName").focus();
         return;
       }
 
@@ -414,6 +423,7 @@
       document.getElementById("memberName").value = "";
       document.getElementById("phone").value = "";
       document.getElementById("major").value = "";
+      document.getElementById("studentId").focus();
 
       saveAndRender();
     }
