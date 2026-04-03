@@ -345,6 +345,28 @@
       return count;
     }
 
+    function syncMembersFromPayers() {
+      const payerNames = new Set();
+      for (const folder of state.folders) {
+        for (const name of folder.payers) {
+          const trimmed = `${name}`.trim();
+          if (trimmed) payerNames.add(trimmed);
+        }
+      }
+
+      for (const name of payerNames) {
+        const exists = state.members.some((m) => m.name === name);
+        if (!exists) {
+          state.members.push({
+            studentId: "",
+            name,
+            phone: "",
+            major: ""
+          });
+        }
+      }
+    }
+
     function renderFolders() {
       folderListEl.innerHTML = "";
 
@@ -686,6 +708,7 @@
     }
 
     function saveAndRender() {
+      syncMembersFromPayers();
       saveState();
       renderFolders();
       renderMembers();
