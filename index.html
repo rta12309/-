@@ -193,6 +193,8 @@
       <div class="right-wrap">
         <section>
           <h3 style="display:flex;align-items:center;gap:8px;">회원명단 <button id="toggleMemberSectionBtn">접기</button></h3>
+          <input id="memberSearch" class="name-input" placeholder="회원 이름 검색" style="margin:10px 0 14px;" />
+          <div id="collapsedSearchResults" class="hint" style="display:none;margin-bottom:12px;"></div>
           <div class="member-form">
             <input id="studentId" placeholder="학번" />
             <input id="memberName" placeholder="이름" />
@@ -201,7 +203,6 @@
             <button id="saveMemberBtn" class="primary">회원 저장</button>
           </div>
           <div id="memberFoldArea">
-          <input id="memberSearch" class="name-input" placeholder="회원 이름 검색" />
           <p class="hint">같은 이름이 있으면 최신 정보로 덮어씁니다.</p>
           <div class="table-wrap">
             <table>
@@ -258,6 +259,7 @@
     const transferBoxEl = document.getElementById("transferBox");
     const toggleMemberSectionBtn = document.getElementById("toggleMemberSectionBtn");
     const memberFoldArea = document.getElementById("memberFoldArea");
+    const collapsedSearchResultsEl = document.getElementById("collapsedSearchResults");
     let memberSearchKeyword = "";
 
     document.getElementById("addFolderBtn").addEventListener("click", () => {
@@ -275,7 +277,9 @@
     toggleMemberSectionBtn.addEventListener("click", () => {
       const isHidden = memberFoldArea.style.display === "none";
       memberFoldArea.style.display = isHidden ? "" : "none";
+      collapsedSearchResultsEl.style.display = isHidden ? "none" : "block";
       toggleMemberSectionBtn.textContent = isHidden ? "접기" : "펼치기";
+      renderMembers();
     });
     [document.getElementById("studentId"), document.getElementById("memberName"), document.getElementById("phone"), document.getElementById("major")]
       .forEach((input) => {
@@ -454,12 +458,22 @@
       memberTableBody.innerHTML = filtered.map((m) => `
         <tr>
           <td>${escapeHtml(m.studentId)}</td>
-          <td><button class="payer-name-btn link" data-action="show-member-from-table" data-member-index="${m.__idx}">${escapeHtml(m.name)}</button></td>
+          <td><button class="payer-name-btn link" data-action="show-member-from-table" data-member-index="${m.__idx}">${escapeHtml(m.name)}</button>${countPaymentsByName(m.name) >= 6 ? ' <span style="color:#dc2626;font-weight:700;">⚠ 6회+</span>' : ""}</td>
           <td>${escapeHtml(m.phone)}</td>
           <td>${escapeHtml(m.major)}</td>
           <td><button class="danger" data-action="delete-member" data-member-index="${m.__idx}">삭제</button></td>
         </tr>
       `).join("");
+
+      if (memberFoldArea.style.display === "none") {
+        if (!filtered.length) {
+          collapsedSearchResultsEl.innerHTML = "검색 결과가 없습니다.";
+        } else {
+          collapsedSearchResultsEl.innerHTML = filtered
+            .map((m) => `<button class="payer-name-btn link" data-action="show-member-by-name" data-name="${escapeHtml(m.name)}">${escapeHtml(m.name)}</button>${countPaymentsByName(m.name) >= 6 ? ' <span style="color:#dc2626;font-weight:700;">⚠ 6회+</span>' : ""}`)
+            .join("<br>");
+        }
+      }
     }
 
     function renderStats() {
@@ -743,6 +757,14 @@
       if (Number.isNaN(index)) return;
       state.members.splice(index, 1);
       saveAndRender();
+    });
+
+    collapsedSearchResultsEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-action='show-member-by-name']");
+      if (!btn) return;
+      const name = btn.dataset.name || "";
+      if (!name) return;
+      showMemberInfoByName(name);
     });
 
     function escapeHtml(str) {
