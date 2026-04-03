@@ -7,190 +7,168 @@
   <style>
     :root {
       --bg: #f6f7fb;
-      --card: #ffffff;
-      --line: #dcdfea;
-      --text: #1f2937;
+      --card: #fff;
+      --line: #dbe1ef;
+      --text: #111827;
       --muted: #6b7280;
       --primary: #4f46e5;
       --danger: #dc2626;
-      --done: #059669;
+      --success: #059669;
     }
-
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: "Pretendard", "Noto Sans KR", Arial, sans-serif;
-      background: var(--bg);
       color: var(--text);
+      background: var(--bg);
     }
-
     header {
-      padding: 16px 20px;
-      border-bottom: 1px solid var(--line);
+      padding: 14px 20px;
       background: #fff;
+      border-bottom: 1px solid var(--line);
       position: sticky;
       top: 0;
       z-index: 10;
     }
-
-    h1 {
-      margin: 0;
-      font-size: 20px;
-    }
+    h1 { margin: 0; font-size: 20px; }
 
     .layout {
       display: grid;
-      grid-template-columns: 340px 1fr;
-      gap: 16px;
-      padding: 16px;
-      min-height: calc(100vh - 66px);
+      grid-template-columns: 360px 1fr;
+      gap: 14px;
+      padding: 14px;
+      min-height: calc(100vh - 60px);
     }
-
     .panel {
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: 12px;
       overflow: hidden;
     }
-
-    .panel-head {
-      padding: 12px;
+    .head {
+      padding: 10px 12px;
       border-bottom: 1px solid var(--line);
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 8px;
-      flex-wrap: wrap;
     }
-
-    .panel-head small { color: var(--muted); }
-
+    .head small { color: var(--muted); }
     button {
       border: 1px solid var(--line);
       background: #fff;
       color: var(--text);
-      padding: 6px 10px;
       border-radius: 8px;
+      padding: 6px 10px;
       cursor: pointer;
       font-size: 13px;
     }
-
     button:hover { background: #f3f4f6; }
-    button.primary {
-      background: var(--primary);
-      border-color: var(--primary);
-      color: #fff;
-    }
-    button.danger {
-      border-color: #fecaca;
-      color: var(--danger);
-    }
+    button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+    button.danger { color: var(--danger); border-color: #fecaca; }
 
     .folder-list {
-      padding: 12px;
+      padding: 10px;
       display: flex;
       flex-direction: column;
       gap: 10px;
-      max-height: calc(100vh - 140px);
+      max-height: calc(100vh - 120px);
       overflow: auto;
     }
-
     .folder {
       border: 1px solid var(--line);
       border-radius: 10px;
       overflow: hidden;
       background: #fff;
     }
-
-    .folder.done-folder {
-      border-color: #bbf7d0;
-      background: #f0fdf4;
-    }
-
-    .folder-header {
-      padding: 8px;
+    .folder.done { border-color: #bbf7d0; background: #f0fdf4; }
+    .folder-head {
       display: grid;
       grid-template-columns: auto 1fr auto;
       gap: 8px;
       align-items: center;
+      padding: 8px;
       border-bottom: 1px solid var(--line);
     }
+    .folder.done .folder-head { border-bottom-color: #bbf7d0; }
+    .folder-body { display: none; padding: 8px; }
+    .folder.expanded .folder-body { display: block; }
 
-    .folder.done-folder .folder-header {
-      border-bottom-color: #bbf7d0;
-    }
-
-    .toggle {
-      width: 30px;
-      height: 30px;
-      border-radius: 8px;
-      font-weight: bold;
-    }
-
-    .name-input {
+    .name-input, .member-form input {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 7px 8px;
       font-size: 14px;
     }
+    .controls { display: flex; gap: 4px; }
 
-    .header-actions {
+    .pay-input-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .hint { color: var(--muted); font-size: 12px; margin: 4px 0 8px; }
+    .payer-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
       display: flex;
-      gap: 4px;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 170px;
+      overflow: auto;
     }
-
-    .folder-body {
-      padding: 8px;
-      display: none;
-    }
-
-    .folder.expanded .folder-body {
-      display: block;
-    }
-
-    textarea {
-      width: 100%;
-      min-height: 130px;
-      resize: vertical;
+    .payer-item {
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 10px;
+      padding: 6px 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      background: #fff;
+    }
+    .payer-name-btn {
+      border: none;
+      background: transparent;
+      padding: 0;
       font-size: 14px;
-      line-height: 1.4;
+      text-align: left;
+      cursor: pointer;
+      color: var(--text);
     }
+    .payer-name-btn.link { color: #2563eb; text-decoration: underline; }
 
-    .hint {
-      margin-top: 6px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .right {
-      padding: 18px;
-    }
-
-    .stats {
+    .right-wrap {
       display: grid;
-      gap: 10px;
-    }
-
-    .stat-card {
-      border: 1px solid var(--line);
-      border-radius: 10px;
+      gap: 12px;
       padding: 12px;
-      background: white;
     }
+    .member-form {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr)) auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
 
-    .stat-card strong { color: var(--done); }
+    .info-box {
+      border: 1px solid #bfdbfe;
+      background: #eff6ff;
+      border-radius: 10px;
+      padding: 10px;
+      min-height: 96px;
+    }
+    .info-box strong { color: #1e40af; }
 
-    @media (max-width: 960px) {
-      .layout {
-        grid-template-columns: 1fr;
-      }
-      .folder-list {
-        max-height: none;
-      }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      .folder-list { max-height: none; }
+      .member-form { grid-template-columns: 1fr 1fr; }
     }
   </style>
 </head>
@@ -201,128 +179,165 @@
 
   <main class="layout">
     <section class="panel">
-      <div class="panel-head">
+      <div class="head">
         <div>
           <strong>학기 폴더</strong><br />
-          <small>왼쪽에서 펼쳐서 납부자 명단을 수정하세요.</small>
+          <small>이름 입력 후 Enter 키를 누르면 저장됩니다.</small>
         </div>
         <button id="addFolderBtn" class="primary">+ 폴더 추가</button>
       </div>
-      <div id="folderList" class="folder-list"></div>
+      <div class="folder-list" id="folderList"></div>
     </section>
 
-    <section class="panel right">
-      <div class="stats" id="stats"></div>
+    <section class="panel">
+      <div class="right-wrap">
+        <section>
+          <h3>회원명단</h3>
+          <div class="member-form">
+            <input id="studentId" placeholder="학번" />
+            <input id="memberName" placeholder="이름" />
+            <input id="phone" placeholder="전화번호" />
+            <input id="major" placeholder="학과" />
+            <button id="saveMemberBtn" class="primary">회원 저장</button>
+          </div>
+          <p class="hint">같은 이름이 있으면 최신 정보로 덮어씁니다.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>학번</th><th>이름</th><th>전화번호</th><th>학과</th><th>관리</th></tr>
+              </thead>
+              <tbody id="memberTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section>
+          <h3>선택한 납부자 회원정보</h3>
+          <div id="selectedInfo" class="info-box">납부자 이름을 클릭하면 회원정보를 표시합니다.</div>
+        </section>
+
+        <section id="stats"></section>
+      </div>
     </section>
   </main>
 
   <script>
-    const STORAGE_KEY = "diva-fee-folders-v1";
+    const STORAGE_KEY = "diva-fee-manager-v2";
 
     const defaultState = {
       folders: [
-        { id: crypto.randomUUID(), name: "2026-1학기", entries: "", expanded: true },
-        { id: crypto.randomUUID(), name: "2026-2학기", entries: "", expanded: false }
-      ]
+        { id: crypto.randomUUID(), name: "2026-1학기", payers: [], expanded: true },
+        { id: crypto.randomUUID(), name: "2026-2학기", payers: [], expanded: false }
+      ],
+      members: []
     };
 
     const state = loadState();
 
     const folderListEl = document.getElementById("folderList");
+    const memberTableBody = document.getElementById("memberTableBody");
+    const selectedInfo = document.getElementById("selectedInfo");
     const statsEl = document.getElementById("stats");
-    const addFolderBtn = document.getElementById("addFolderBtn");
 
-    addFolderBtn.addEventListener("click", () => {
-      state.folders.push({
-        id: crypto.randomUUID(),
-        name: `새 학기 ${state.folders.length + 1}`,
-        entries: "",
-        expanded: true
-      });
+    document.getElementById("addFolderBtn").addEventListener("click", () => {
+      state.folders.push({ id: crypto.randomUUID(), name: `새 학기 ${state.folders.length + 1}`, payers: [], expanded: true });
       saveAndRender();
     });
 
+    document.getElementById("saveMemberBtn").addEventListener("click", saveMemberFromForm);
+
     function loadState() {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return structuredClone(defaultState);
+
       try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) return structuredClone(defaultState);
         const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed.folders)) return structuredClone(defaultState);
         return {
-          folders: parsed.folders.map((f, i) => ({
-            id: f.id || crypto.randomUUID(),
-            name: typeof f.name === "string" ? f.name : `학기 ${i + 1}`,
-            entries: typeof f.entries === "string" ? f.entries : "",
-            expanded: !!f.expanded
-          }))
+          folders: Array.isArray(parsed.folders)
+            ? parsed.folders.map((f, i) => ({
+                id: f.id || crypto.randomUUID(),
+                name: typeof f.name === "string" ? f.name : `학기 ${i + 1}`,
+                payers: normalizePayers(f),
+                expanded: !!f.expanded
+              }))
+            : structuredClone(defaultState.folders),
+          members: Array.isArray(parsed.members)
+            ? parsed.members.map(m => ({
+                studentId: `${m.studentId || ""}`.trim(),
+                name: `${m.name || ""}`.trim(),
+                phone: `${m.phone || ""}`.trim(),
+                major: `${m.major || ""}`.trim()
+              })).filter(m => m.name)
+            : []
         };
       } catch {
         return structuredClone(defaultState);
       }
     }
 
+    function normalizePayers(folderData) {
+      if (Array.isArray(folderData.payers)) {
+        return folderData.payers.map(v => `${v}`.trim()).filter(Boolean);
+      }
+      if (typeof folderData.entries === "string") {
+        return folderData.entries.split("\n").map(v => v.trim()).filter(Boolean);
+      }
+      return [];
+    }
+
     function saveState() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     }
 
-    function parseNames(text) {
-      return text
-        .split("\n")
-        .map(v => v.trim())
-        .filter(Boolean);
+    function getMemberByName(name) {
+      return state.members.find(m => m.name === name) || null;
     }
 
     function getCompleteMembers() {
-      const countMap = new Map();
+      const map = new Map();
       for (const folder of state.folders) {
-        for (const name of parseNames(folder.entries)) {
-          countMap.set(name, (countMap.get(name) || 0) + 1);
+        for (const name of folder.payers) {
+          map.set(name, (map.get(name) || 0) + 1);
         }
       }
-      return Array.from(countMap.entries())
+      return Array.from(map.entries())
         .filter(([, count]) => count >= 5)
         .map(([name]) => name)
         .sort((a, b) => a.localeCompare(b, "ko"));
     }
 
-    function moveFolder(index, dir) {
-      const to = index + dir;
-      if (to < 0 || to >= state.folders.length) return;
-      [state.folders[index], state.folders[to]] = [state.folders[to], state.folders[index]];
-      saveAndRender();
-    }
-
-    function removeFolder(index) {
-      const target = state.folders[index];
-      if (!target) return;
-      if (!confirm(`'${target.name}' 폴더를 삭제할까요?`)) return;
-      state.folders.splice(index, 1);
-      saveAndRender();
-    }
-
-    function render() {
+    function renderFolders() {
       folderListEl.innerHTML = "";
 
       state.folders.forEach((folder, index) => {
         const wrapper = document.createElement("article");
         wrapper.className = `folder ${folder.expanded ? "expanded" : ""}`;
-
         const upDisabled = index === 0 ? "disabled" : "";
         const downDisabled = index === state.folders.length - 1 ? "disabled" : "";
 
         wrapper.innerHTML = `
-          <div class="folder-header">
-            <button class="toggle" data-action="toggle" data-index="${index}">${folder.expanded ? "−" : "+"}</button>
+          <div class="folder-head">
+            <button data-action="toggle" data-index="${index}">${folder.expanded ? "−" : "+"}</button>
             <input class="name-input" data-action="rename" data-index="${index}" value="${escapeHtml(folder.name)}" />
-            <div class="header-actions">
+            <div class="controls">
               <button data-action="up" data-index="${index}" ${upDisabled}>↑</button>
               <button data-action="down" data-index="${index}" ${downDisabled}>↓</button>
               <button class="danger" data-action="remove" data-index="${index}">삭제</button>
             </div>
           </div>
           <div class="folder-body">
-            <textarea data-action="entries" data-index="${index}" placeholder="납부자 이름을 한 줄에 한 명씩 입력하세요">${escapeHtml(folder.entries)}</textarea>
-            <div class="hint">저장: 입력 즉시 자동 저장됨</div>
+            <div class="pay-input-row">
+              <input class="name-input" data-action="payer-input" data-index="${index}" placeholder="납부자 이름 입력 후 Enter" />
+              <button data-action="add-payer" data-index="${index}">추가</button>
+            </div>
+            <div class="hint">입력 즉시 저장이 아니라 Enter 키(또는 추가 버튼)로 저장됩니다.</div>
+            <ul class="payer-list">${folder.payers.map((name, i) => {
+              const hasMember = !!getMemberByName(name);
+              return `<li class="payer-item">
+                <button class="payer-name-btn ${hasMember ? "link" : ""}" data-action="show-member" data-index="${index}" data-payer-index="${i}">${escapeHtml(name)}</button>
+                <button class="danger" data-action="remove-payer" data-index="${index}" data-payer-index="${i}">삭제</button>
+              </li>`;
+            }).join("")}</ul>
           </div>
         `;
 
@@ -330,36 +345,81 @@
       });
 
       const complete = getCompleteMembers();
-      const completeWrapper = document.createElement("article");
-      completeWrapper.className = "folder done-folder expanded";
-      completeWrapper.innerHTML = `
-        <div class="folder-header">
-          <button class="toggle" disabled>✓</button>
-          <strong>완납자 명단 (전체 폴더 5회 이상 입력)</strong>
+      const done = document.createElement("article");
+      done.className = "folder done expanded";
+      done.innerHTML = `
+        <div class="folder-head">
+          <button disabled>✓</button>
+          <strong>완납자 명단 (5회 이상)</strong>
           <div></div>
         </div>
         <div class="folder-body">
-          <textarea readonly>${complete.join("\n")}</textarea>
-          <div class="hint">자동 계산 폴더이므로 직접 수정할 수 없습니다.</div>
+          <ul class="payer-list">${complete.map(name => `<li class="payer-item"><button class="payer-name-btn ${getMemberByName(name) ? "link" : ""}" data-action="show-complete-member" data-name="${escapeHtml(name)}">${escapeHtml(name)}</button></li>`).join("") || "<li class='hint'>아직 없습니다.</li>"}</ul>
         </div>
       `;
-      folderListEl.appendChild(completeWrapper);
+      folderListEl.appendChild(done);
+    }
 
-      const totalNames = state.folders.reduce((sum, f) => sum + parseNames(f.entries).length, 0);
+    function renderMembers() {
+      memberTableBody.innerHTML = state.members.map((m, i) => `
+        <tr>
+          <td>${escapeHtml(m.studentId)}</td>
+          <td>${escapeHtml(m.name)}</td>
+          <td>${escapeHtml(m.phone)}</td>
+          <td>${escapeHtml(m.major)}</td>
+          <td><button class="danger" data-action="delete-member" data-member-index="${i}">삭제</button></td>
+        </tr>
+      `).join("");
+    }
+
+    function renderStats() {
+      const totalPayers = state.folders.reduce((sum, f) => sum + f.payers.length, 0);
+      const completeCount = getCompleteMembers().length;
       statsEl.innerHTML = `
-        <div class="stat-card">총 학기 폴더 수: <strong>${state.folders.length}</strong></div>
-        <div class="stat-card">전체 입력된 이름 수(중복 포함): <strong>${totalNames}</strong></div>
-        <div class="stat-card">완납자 수: <strong>${complete.length}</strong></div>
+        <h3>요약</h3>
+        <div class="hint">학기 폴더 수: <strong>${state.folders.length}</strong></div>
+        <div class="hint">전체 납부 입력 수(중복 포함): <strong>${totalPayers}</strong></div>
+        <div class="hint">완납자 수: <strong>${completeCount}</strong></div>
       `;
     }
 
-    function escapeHtml(str) {
-      return str
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#39;");
+    function saveMemberFromForm() {
+      const studentId = document.getElementById("studentId").value.trim();
+      const name = document.getElementById("memberName").value.trim();
+      const phone = document.getElementById("phone").value.trim();
+      const major = document.getElementById("major").value.trim();
+
+      if (!name) {
+        alert("이름은 필수입니다.");
+        return;
+      }
+
+      const idx = state.members.findIndex(m => m.name === name);
+      const payload = { studentId, name, phone, major };
+      if (idx >= 0) state.members[idx] = payload;
+      else state.members.push(payload);
+
+      document.getElementById("studentId").value = "";
+      document.getElementById("memberName").value = "";
+      document.getElementById("phone").value = "";
+      document.getElementById("major").value = "";
+
+      saveAndRender();
+    }
+
+    function showMemberInfoByName(name) {
+      const member = getMemberByName(name);
+      if (!member) {
+        selectedInfo.textContent = `"${name}" 이름의 회원정보가 회원명단에 없습니다.`;
+        return;
+      }
+
+      selectedInfo.innerHTML = `
+        <strong>${escapeHtml(member.name)}</strong><br>
+        학번: ${escapeHtml(member.studentId) || "-"}<br>
+        전화번호: ${escapeHtml(member.phone) || "-"}<br>
+        학과: ${escapeHtml(member.major) || "-"}
+      `;
     }
 
     folderListEl.addEventListener("click", (e) => {
@@ -368,45 +428,120 @@
 
       const action = btn.dataset.action;
       const index = Number(btn.dataset.index);
-
-      if (Number.isNaN(index)) return;
+      const payerIndex = Number(btn.dataset.payerIndex);
 
       if (action === "toggle") {
-        state.folders[index].expanded = !state.folders[index].expanded;
-      } else if (action === "up") {
-        moveFolder(index, -1);
-        return;
-      } else if (action === "down") {
-        moveFolder(index, 1);
-        return;
-      } else if (action === "remove") {
-        removeFolder(index);
+        if (!Number.isNaN(index)) {
+          state.folders[index].expanded = !state.folders[index].expanded;
+          saveAndRender();
+        }
         return;
       }
 
+      if (action === "up" || action === "down") {
+        if (Number.isNaN(index)) return;
+        const to = action === "up" ? index - 1 : index + 1;
+        if (to < 0 || to >= state.folders.length) return;
+        [state.folders[index], state.folders[to]] = [state.folders[to], state.folders[index]];
+        saveAndRender();
+        return;
+      }
+
+      if (action === "remove") {
+        if (Number.isNaN(index)) return;
+        if (!confirm(`'${state.folders[index].name}' 폴더를 삭제할까요?`)) return;
+        state.folders.splice(index, 1);
+        saveAndRender();
+        return;
+      }
+
+      if (action === "add-payer") {
+        if (Number.isNaN(index)) return;
+        const input = folderListEl.querySelector(`input[data-action='payer-input'][data-index='${index}']`);
+        if (!input) return;
+        const name = input.value.trim();
+        if (!name) return;
+        state.folders[index].payers.push(name);
+        input.value = "";
+        saveAndRender();
+        return;
+      }
+
+      if (action === "remove-payer") {
+        if (Number.isNaN(index) || Number.isNaN(payerIndex)) return;
+        state.folders[index].payers.splice(payerIndex, 1);
+        saveAndRender();
+        return;
+      }
+
+      if (action === "show-member") {
+        if (Number.isNaN(index) || Number.isNaN(payerIndex)) return;
+        const name = state.folders[index].payers[payerIndex];
+        showMemberInfoByName(name);
+        return;
+      }
+
+      if (action === "show-complete-member") {
+        const name = btn.dataset.name || "";
+        showMemberInfoByName(name);
+      }
+    });
+
+    folderListEl.addEventListener("keydown", (e) => {
+      const input = e.target;
+      if (!(input instanceof HTMLInputElement)) return;
+      if (input.dataset.action !== "payer-input") return;
+      if (e.key !== "Enter") return;
+
+      e.preventDefault();
+      const index = Number(input.dataset.index);
+      if (Number.isNaN(index)) return;
+      const name = input.value.trim();
+      if (!name) return;
+
+      state.folders[index].payers.push(name);
+      input.value = "";
       saveAndRender();
     });
 
-    folderListEl.addEventListener("input", (e) => {
+    folderListEl.addEventListener("change", (e) => {
       const target = e.target;
+      if (!(target instanceof HTMLInputElement)) return;
+
       const action = target.dataset.action;
       const index = Number(target.dataset.index);
-      if (Number.isNaN(index)) return;
-
-      if (action === "rename") {
+      if (action === "rename" && !Number.isNaN(index)) {
         state.folders[index].name = target.value;
-      } else if (action === "entries") {
-        state.folders[index].entries = target.value;
+        saveAndRender();
       }
+    });
+
+    memberTableBody.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-action='delete-member']");
+      if (!btn) return;
+      const index = Number(btn.dataset.memberIndex);
+      if (Number.isNaN(index)) return;
+      state.members.splice(index, 1);
       saveAndRender();
     });
+
+    function escapeHtml(str) {
+      return `${str}`
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
 
     function saveAndRender() {
       saveState();
-      render();
+      renderFolders();
+      renderMembers();
+      renderStats();
     }
 
-    render();
+    saveAndRender();
   </script>
 </body>
 </html>
