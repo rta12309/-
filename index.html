@@ -193,8 +193,6 @@
       <div class="right-wrap">
         <section>
           <h3 style="display:flex;align-items:center;gap:8px;">회원명단 <button id="toggleMemberSectionBtn">접기</button></h3>
-          <div id="memberSectionBody">
-          <input id="memberSearch" class="name-input" placeholder="회원 이름 검색" />
           <div class="member-form">
             <input id="studentId" placeholder="학번" />
             <input id="memberName" placeholder="이름" />
@@ -202,6 +200,8 @@
             <input id="major" placeholder="학과" />
             <button id="saveMemberBtn" class="primary">회원 저장</button>
           </div>
+          <div id="memberFoldArea">
+          <input id="memberSearch" class="name-input" placeholder="회원 이름 검색" />
           <p class="hint">같은 이름이 있으면 최신 정보로 덮어씁니다.</p>
           <div class="table-wrap">
             <table>
@@ -257,7 +257,7 @@
     const memberSearchEl = document.getElementById("memberSearch");
     const transferBoxEl = document.getElementById("transferBox");
     const toggleMemberSectionBtn = document.getElementById("toggleMemberSectionBtn");
-    const memberSectionBody = document.getElementById("memberSectionBody");
+    const memberFoldArea = document.getElementById("memberFoldArea");
     let memberSearchKeyword = "";
 
     document.getElementById("addFolderBtn").addEventListener("click", () => {
@@ -273,8 +273,8 @@
       renderMembers();
     });
     toggleMemberSectionBtn.addEventListener("click", () => {
-      const isHidden = memberSectionBody.style.display === "none";
-      memberSectionBody.style.display = isHidden ? "" : "none";
+      const isHidden = memberFoldArea.style.display === "none";
+      memberFoldArea.style.display = isHidden ? "" : "none";
       toggleMemberSectionBtn.textContent = isHidden ? "접기" : "펼치기";
     });
     [document.getElementById("studentId"), document.getElementById("memberName"), document.getElementById("phone"), document.getElementById("major")]
@@ -502,11 +502,15 @@
     function showMemberInfoByName(name) {
       const member = getMemberByName(name);
       const payCount = countPaymentsByName(name);
+      const warningHtml = payCount >= 6
+        ? `<br><span style="color:#dc2626;font-weight:700;">⚠️ 경고: 회비 납부 횟수가 6회 이상입니다.</span>`
+        : "";
       if (!member) {
         selectedInfo.innerHTML = `
           <strong>${escapeHtml(name)}</strong><br>
           회원명단 정보: 없음<br>
           회비 납부 횟수: ${payCount}회
+          ${warningHtml}
         `;
         return;
       }
@@ -517,6 +521,7 @@
         전화번호: ${escapeHtml(member.phone) || "-"}<br>
         학과: ${escapeHtml(member.major) || "-"}<br>
         회비 납부 횟수: ${payCount}회
+        ${warningHtml}
       `;
     }
 
