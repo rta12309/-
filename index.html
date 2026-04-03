@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DIVA 회비 납부 관리</title>
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --card: #ffffff;
+      --line: #dcdfea;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --primary: #4f46e5;
+      --danger: #dc2626;
+      --done: #059669;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Pretendard", "Noto Sans KR", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 20px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      gap: 16px;
+      padding: 16px;
+      min-height: calc(100vh - 66px);
+    }
+
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .panel-head {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .panel-head small { color: var(--muted); }
+
+    button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+      padding: 6px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    button:hover { background: #f3f4f6; }
+    button.primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+    }
+    button.danger {
+      border-color: #fecaca;
+      color: var(--danger);
+    }
+
+    .folder-list {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: calc(100vh - 140px);
+      overflow: auto;
+    }
+
+    .folder {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .folder.done-folder {
+      border-color: #bbf7d0;
+      background: #f0fdf4;
+    }
+
+    .folder-header {
+      padding: 8px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 8px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .folder.done-folder .folder-header {
+      border-bottom-color: #bbf7d0;
+    }
+
+    .toggle {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      font-weight: bold;
+    }
+
+    .name-input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 7px 8px;
+      font-size: 14px;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 4px;
+    }
+
+    .folder-body {
+      padding: 8px;
+      display: none;
+    }
+
+    .folder.expanded .folder-body {
+      display: block;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 130px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    .hint {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .right {
+      padding: 18px;
+    }
+
+    .stats {
+      display: grid;
+      gap: 10px;
+    }
+
+    .stat-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      background: white;
+    }
+
+    .stat-card strong { color: var(--done); }
+
+    @media (max-width: 960px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .folder-list {
+        max-height: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>DIVA 동아리 회비 납부 관리</h1>
+  </header>
+
+  <main class="layout">
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <strong>학기 폴더</strong><br />
+          <small>왼쪽에서 펼쳐서 납부자 명단을 수정하세요.</small>
+        </div>
+        <button id="addFolderBtn" class="primary">+ 폴더 추가</button>
+      </div>
+      <div id="folderList" class="folder-list"></div>
+    </section>
+
+    <section class="panel right">
+      <div class="stats" id="stats"></div>
+    </section>
+  </main>
+
+  <script>
+    const STORAGE_KEY = "diva-fee-folders-v1";
+
+    const defaultState = {
+      folders: [
+        { id: crypto.randomUUID(), name: "2026-1학기", entries: "", expanded: true },
+        { id: crypto.randomUUID(), name: "2026-2학기", entries: "", expanded: false }
+      ]
+    };
+
+    const state = loadState();
+
+    const folderListEl = document.getElementById("folderList");
+    const statsEl = document.getElementById("stats");
+    const addFolderBtn = document.getElementById("addFolderBtn");
+
+    addFolderBtn.addEventListener("click", () => {
+      state.folders.push({
+        id: crypto.randomUUID(),
+        name: `새 학기 ${state.folders.length + 1}`,
+        entries: "",
+        expanded: true
+      });
+      saveAndRender();
+    });
+
+    function loadState() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return structuredClone(defaultState);
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed.folders)) return structuredClone(defaultState);
+        return {
+          folders: parsed.folders.map((f, i) => ({
+            id: f.id || crypto.randomUUID(),
+            name: typeof f.name === "string" ? f.name : `학기 ${i + 1}`,
+            entries: typeof f.entries === "string" ? f.entries : "",
+            expanded: !!f.expanded
+          }))
+        };
+      } catch {
+        return structuredClone(defaultState);
+      }
+    }
+
+    function saveState() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+
+    function parseNames(text) {
+      return text
+        .split("\n")
+        .map(v => v.trim())
+        .filter(Boolean);
+    }
+
+    function getCompleteMembers() {
+      const countMap = new Map();
+      for (const folder of state.folders) {
+        for (const name of parseNames(folder.entries)) {
+          countMap.set(name, (countMap.get(name) || 0) + 1);
+        }
+      }
+      return Array.from(countMap.entries())
+        .filter(([, count]) => count >= 5)
+        .map(([name]) => name)
+        .sort((a, b) => a.localeCompare(b, "ko"));
+    }
+
+    function moveFolder(index, dir) {
+      const to = index + dir;
+      if (to < 0 || to >= state.folders.length) return;
+      [state.folders[index], state.folders[to]] = [state.folders[to], state.folders[index]];
+      saveAndRender();
+    }
+
+    function removeFolder(index) {
+      const target = state.folders[index];
+      if (!target) return;
+      if (!confirm(`'${target.name}' 폴더를 삭제할까요?`)) return;
+      state.folders.splice(index, 1);
+      saveAndRender();
+    }
+
+    function render() {
+      folderListEl.innerHTML = "";
+
+      state.folders.forEach((folder, index) => {
+        const wrapper = document.createElement("article");
+        wrapper.className = `folder ${folder.expanded ? "expanded" : ""}`;
+
+        const upDisabled = index === 0 ? "disabled" : "";
+        const downDisabled = index === state.folders.length - 1 ? "disabled" : "";
+
+        wrapper.innerHTML = `
+          <div class="folder-header">
+            <button class="toggle" data-action="toggle" data-index="${index}">${folder.expanded ? "−" : "+"}</button>
+            <input class="name-input" data-action="rename" data-index="${index}" value="${escapeHtml(folder.name)}" />
+            <div class="header-actions">
+              <button data-action="up" data-index="${index}" ${upDisabled}>↑</button>
+              <button data-action="down" data-index="${index}" ${downDisabled}>↓</button>
+              <button class="danger" data-action="remove" data-index="${index}">삭제</button>
+            </div>
+          </div>
+          <div class="folder-body">
+            <textarea data-action="entries" data-index="${index}" placeholder="납부자 이름을 한 줄에 한 명씩 입력하세요">${escapeHtml(folder.entries)}</textarea>
+            <div class="hint">저장: 입력 즉시 자동 저장됨</div>
+          </div>
+        `;
+
+        folderListEl.appendChild(wrapper);
+      });
+
+      const complete = getCompleteMembers();
+      const completeWrapper = document.createElement("article");
+      completeWrapper.className = "folder done-folder expanded";
+      completeWrapper.innerHTML = `
+        <div class="folder-header">
+          <button class="toggle" disabled>✓</button>
+          <strong>완납자 명단 (전체 폴더 5회 이상 입력)</strong>
+          <div></div>
+        </div>
+        <div class="folder-body">
+          <textarea readonly>${complete.join("\n")}</textarea>
+          <div class="hint">자동 계산 폴더이므로 직접 수정할 수 없습니다.</div>
+        </div>
+      `;
+      folderListEl.appendChild(completeWrapper);
+
+      const totalNames = state.folders.reduce((sum, f) => sum + parseNames(f.entries).length, 0);
+      statsEl.innerHTML = `
+        <div class="stat-card">총 학기 폴더 수: <strong>${state.folders.length}</strong></div>
+        <div class="stat-card">전체 입력된 이름 수(중복 포함): <strong>${totalNames}</strong></div>
+        <div class="stat-card">완납자 수: <strong>${complete.length}</strong></div>
+      `;
+    }
+
+    function escapeHtml(str) {
+      return str
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    folderListEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-action]");
+      if (!btn) return;
+
+      const action = btn.dataset.action;
+      const index = Number(btn.dataset.index);
+
+      if (Number.isNaN(index)) return;
+
+      if (action === "toggle") {
+        state.folders[index].expanded = !state.folders[index].expanded;
+      } else if (action === "up") {
+        moveFolder(index, -1);
+        return;
+      } else if (action === "down") {
+        moveFolder(index, 1);
+        return;
+      } else if (action === "remove") {
+        removeFolder(index);
+        return;
+      }
+
+      saveAndRender();
+    });
+
+    folderListEl.addEventListener("input", (e) => {
+      const target = e.target;
+      const action = target.dataset.action;
+      const index = Number(target.dataset.index);
+      if (Number.isNaN(index)) return;
+
+      if (action === "rename") {
+        state.folders[index].name = target.value;
+      } else if (action === "entries") {
+        state.folders[index].entries = target.value;
+      }
+      saveAndRender();
+    });
+
+    function saveAndRender() {
+      saveState();
+      render();
+    }
+
+    render();
+  </script>
+</body>
+</html>
