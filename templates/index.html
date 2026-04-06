@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>바낸업빗가격차이 알림</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f4f6f8; }
+    .card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    label { font-size: 14px; }
+    input[type="number"], input[type="text"] { padding: 6px; width: 150px; }
+    button { padding: 8px 12px; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #eef2f6; }
+    .danger { background: #ffe4e4; color: #9a0000; font-weight: bold; }
+    .ok { background: #ecfff0; color: #00641c; }
+    .muted { color: #666; font-size: 12px; }
+    .warningBox { background: #fff6d6; border: 1px solid #ffdb7a; padding: 8px; border-radius: 6px; margin-top: 8px; display: none; }
+    #toast { position: fixed; bottom: 20px; right: 20px; background: #333; color: #fff; padding: 10px 14px; border-radius: 8px; display: none; z-index: 1000; }
+    #errorLog { max-height: 140px; overflow-y: auto; background: #111; color: #ffb4b4; padding: 10px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h2>바낸업빗가격차이 알림 (웹 전용)</h2>
+
+  <div class="card">
+    <div class="row">
+      <button id="startBtn">시작</button>
+      <button id="stopBtn">중지</button>
+      <button id="webTestBtn">웹 알림 테스트</button>
+      <button id="tgTestBtn">텔레그램 테스트</button>
+      <label>알람소리 <input id="alertVolume" type="range" min="0" max="100" step="1" value="18"></label>
+      <span id="statusText" class="muted">상태: 중지</span>
+    </div>
+    <hr />
+    <div class="row">
+      <label>업비트 티커/숫자 <input id="tickerUpbit" type="text" value="" placeholder="BTC"></label>
+      <label><input id="enableUpbit" type="checkbox" checked> 업비트 탐색 ON</label>
+      <label>빗썸 티커/숫자 <input id="tickerBithumb" type="text" value="" placeholder="BTC"></label>
+      <label><input id="enableBithumb" type="checkbox" checked> 빗썸 탐색 ON</label>
+      <label>바이낸스 티커/숫자 <input id="tickerBinance" type="text" value="" placeholder="BTC"></label>
+      <label><input id="enableBinance" type="checkbox" checked> 바이낸스 탐색 ON</label>
+      <label>바이비트 티커/숫자 <input id="tickerBybit" type="text" value="" placeholder="BTC"></label>
+      <label><input id="enableBybit" type="checkbox" checked> 바이비트 탐색 ON</label>
+      <label>임계값(%) <input id="threshold" type="number" step="0.1" value="5"></label>
+      <label>조회주기(초) <input id="interval" type="number" min="3" value="5"></label>
+      <label>쿨다운(초) <input id="cooldown" type="number" min="10" value="300"></label>
+      <label>현물/선물 괴리 차단값(%) <input id="gapThreshold" type="number" step="0.1" min="0.1" value="2"></label>
+      <label>상한 알림가(USDT) <input id="priceAlertHigh" type="number" step="0.0001" placeholder="예: 1.5"></label>
+      <label>하한 알림가(USDT) <input id="priceAlertLow" type="number" step="0.0001" placeholder="예: 1.1"></label>
+      <label><input id="repeatPriceAlert" type="checkbox" checked> 가격조건 계속 알림</label>
+      <label><input id="webAlertToggle" type="checkbox" checked> 웹 알림 ON</label>
+      <label><input id="tgToggle" type="checkbox"> 텔레그램 ON</label>
+      <label><input id="ignoreSpotFuturesGap" type="checkbox"> 선물/현물 괴리 차단 ON</label>
+    </div>
+    <div class="row" style="margin-top: 8px;">
+      <label>Telegram Bot Token <input id="tgToken" type="text" value="8221918138:AAFHezcy9uk149EH5_wum5RLFN1b-WeaS0I" placeholder="12345:ABC..."></label>
+      <label>Telegram Chat ID <input id="tgChatId" type="text" value="7192256225" placeholder="987654321"></label>
+    </div>
+    <div id="gapNotice" class="warningBox"></div>
+  </div>
+
+  <div class="card">
+    <h3>현재 가격</h3>
+    <table>
+      <thead><tr><th>항목</th><th>가격</th></tr></thead>
+      <tbody>
+        <tr><td>업비트 KRW-<span class="tickerUpbitText">BTC</span></td><td id="pUpbit">-</td></tr>
+        <tr><td>빗썸 <span class="tickerBithumbText">BTC</span>_KRW</td><td id="pBithumb">-</td></tr>
+        <tr><td>바이낸스 현물 <span class="tickerBinanceText">BTC</span>USDT</td><td id="pBinanceSpotUsdt">-</td></tr>
+        <tr><td>바이낸스 선물 <span class="tickerBinanceText">BTC</span>USDT</td><td id="pBinanceFuturesUsdt">-</td></tr>
+        <tr><td>바이낸스 선물-현물 가격차이(%)</td><td id="pBinanceGap">-</td></tr>
+        <tr><td>바이비트 현물 <span class="tickerBybitText">BTC</span>USDT</td><td id="pBybitSpotUsdt">-</td></tr>
+        <tr><td>바이비트 선물 <span class="tickerBybitText">BTC</span>USDT</td><td id="pBybitFuturesUsdt">-</td></tr>
+        <tr><td>바이비트 선물-현물 가격차이(%)</td><td id="pBybitGap">-</td></tr>
+        <tr><td>USDT→KRW (업비트 KRW-USDT)</td><td id="pUsdtKrw">-</td></tr>
+        <tr><td>바이낸스 현물 환산 KRW</td><td id="pBinanceSpotKrw">-</td></tr>
+        <tr><td>바이비트 현물 환산 KRW</td><td id="pBybitSpotKrw">-</td></tr>
+      </tbody>
+    </table>
+    <p class="muted">마지막 업데이트: <span id="updatedAt">-</span></p>
+  </div>
+
+  <div class="card">
+    <h3>가격 차이(diff%)</h3>
+    <table>
+      <thead><tr><th>비교쌍</th><th>diff%</th><th>상태</th></tr></thead>
+      <tbody>
+        <tr id="row-upbit_bithumb"><td>업비트 ↔ 빗썸</td><td id="d-upbit_bithumb">-</td><td id="s-upbit_bithumb">-</td></tr>
+        <tr id="row-upbit_binance"><td>업비트 ↔ 바이낸스 현물(환산)</td><td id="d-upbit_binance">-</td><td id="s-upbit_binance">-</td></tr>
+        <tr id="row-bithumb_binance"><td>빗썸 ↔ 바이낸스 현물(환산)</td><td id="d-bithumb_binance">-</td><td id="s-bithumb_binance">-</td></tr>
+        <tr id="row-upbit_bybit"><td>업비트 ↔ 바이비트 현물(환산)</td><td id="d-upbit_bybit">-</td><td id="s-upbit_bybit">-</td></tr>
+        <tr id="row-bithumb_bybit"><td>빗썸 ↔ 바이비트 현물(환산)</td><td id="d-bithumb_bybit">-</td><td id="s-bithumb_bybit">-</td></tr>
+        <tr id="row-binance_bybit"><td>바이낸스 현물 ↔ 바이비트 현물(환산)</td><td id="d-binance_bybit">-</td><td id="s-binance_bybit">-</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>오류 로그</h3>
+    <div id="errorLog">(없음)</div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script>
+    let timer = null;
+    let lastWebAlertAt = 0;
+    let lastTelegramAlertAt = 0;
+
+    function showToast(message) {
+      const t = document.getElementById('toast');
+      t.textContent = message;
+      t.style.display = 'block';
+      setTimeout(() => t.style.display = 'none', 2600);
+    }
+
+    function beep() {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const vol = Number(document.getElementById('alertVolume')?.value || 18) / 100;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = 880;
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(Math.max(0, Math.min(1, vol)), ctx.currentTime);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.22);
+    }
+
+    async function requestNotificationPermission() {
+      if ('Notification' in window && Notification.permission === 'default') {
+        await Notification.requestPermission();
+      }
+    }
+
+    function notifyWeb(message) {
+      showToast(message);
+      beep();
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('가격차 알림', { body: message });
+      }
+    }
+
+    function num(v, digits = 2) {
+      return Number(v).toLocaleString('ko-KR', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+    }
+
+    function diffPercent(a, b) {
+      const minV = Math.min(a, b);
+      if (!isFinite(minV) || minV <= 0) return 0;
+      return Math.abs(a - b) / minV * 100;
+    }
+
+    function parseMaybeNumber(s) {
+      const t = (s || '').trim();
+      if (!t) return null;
+      if (/^[0-9]+(\.[0-9]+)?$/.test(t)) return Number(t);
+      return null;
+    }
+
+    function currentSymbols() {
+      return {
+        upbit: (document.getElementById('tickerUpbit').value || '').trim().toUpperCase(),
+        bithumb: (document.getElementById('tickerBithumb').value || '').trim().toUpperCase(),
+        binance: (document.getElementById('tickerBinance').value || '').trim().toUpperCase(),
+        bybit: (document.getElementById('tickerBybit').value || '').trim().toUpperCase(),
+      };
+    }
+
+    function currentEnabled() {
+      return {
+        upbit: document.getElementById('enableUpbit').checked,
+        bithumb: document.getElementById('enableBithumb').checked,
+        binance: document.getElementById('enableBinance').checked,
+        bybit: document.getElementById('enableBybit').checked,
+      };
+    }
+
+    function syncTickerLabel(symbols) {
+      document.querySelectorAll('.tickerUpbitText').forEach(el => { el.textContent = symbols.upbit || '-'; });
+      document.querySelectorAll('.tickerBithumbText').forEach(el => { el.textContent = symbols.bithumb || '-'; });
+      document.querySelectorAll('.tickerBinanceText').forEach(el => { el.textContent = symbols.binance || '-'; });
+      document.querySelectorAll('.tickerBybitText').forEach(el => { el.textContent = symbols.bybit || '-'; });
+    }
+
+    function updateDiffRow(key, value, threshold) {
+      const diffEl = document.getElementById(`d-${key}`);
+      const statusEl = document.getElementById(`s-${key}`);
+      const row = document.getElementById(`row-${key}`);
+      if (value === null) {
+        diffEl.textContent = '-';
+        statusEl.textContent = '데이터없음';
+        row.className = '';
+        return;
+      }
+      diffEl.textContent = `${num(value, 2)}%`;
+      if (value >= threshold) {
+        row.className = 'danger';
+        statusEl.textContent = '⚠️ 임계값 초과';
+      } else {
+        row.className = 'ok';
+        statusEl.textContent = '정상';
+      }
+    }
+
+    async function fetchJson(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${url} 요청 실패`);
+      return res.json();
+    }
+
+    async function safeFetchJson(url) {
+      try { return await fetchJson(url); } catch { return null; }
+    }
+
+    function parseUpbitPrice(data) {
+      if (Array.isArray(data) && data[0] && data[0].trade_price) return Number(data[0].trade_price);
+      return null;
+    }
+
+    function parseBithumbPrice(data) {
+      if (data && data.status === '0000' && data.data && data.data.closing_price) return Number(data.data.closing_price);
+      return null;
+    }
+
+    function parseBinancePrice(data) {
+      if (data && data.price) return Number(data.price);
+      return null;
+    }
+
+    function parseBybitPrice(data) {
+      const list = data?.result?.list;
+      if (Array.isArray(list) && list[0] && list[0].lastPrice) return Number(list[0].lastPrice);
+      return null;
+    }
+
+    async function getPrices(symbols, enabled) {
+      const upbitNum = parseMaybeNumber(symbols.upbit);
+      const bithumbNum = parseMaybeNumber(symbols.bithumb);
+      const binanceNum = parseMaybeNumber(symbols.binance);
+      const bybitNum = parseMaybeNumber(symbols.bybit);
+
+      const hasUpbitSymbol = symbols.upbit.length > 0;
+      const hasBithumbSymbol = symbols.bithumb.length > 0;
+      const hasBinanceSymbol = symbols.binance.length > 0;
+      const hasBybitSymbol = symbols.bybit.length > 0;
+
+      const upbitMarket = hasUpbitSymbol ? `KRW-${symbols.upbit}` : '';
+      const bithumbMarket = hasBithumbSymbol ? `${symbols.bithumb}_KRW` : '';
+      const binanceSymbol = hasBinanceSymbol ? `${symbols.binance}USDT` : '';
+      const bybitSymbol = hasBybitSymbol ? `${symbols.bybit}USDT` : '';
+
+      const [upbitTicker, upbitUsdt, bithumb, binanceSpot, binanceFutures, bybitSpot, bybitFutures] = await Promise.all([
+        (enabled.upbit && hasUpbitSymbol && upbitNum === null) ? safeFetchJson(`https://api.upbit.com/v1/ticker?markets=${upbitMarket}`) : Promise.resolve(null),
+        (enabled.upbit && hasUpbitSymbol) ? safeFetchJson('https://api.upbit.com/v1/ticker?markets=KRW-USDT') : Promise.resolve(null),
+        (enabled.bithumb && hasBithumbSymbol && bithumbNum === null) ? safeFetchJson(`https://api.bithumb.com/public/ticker/${bithumbMarket}`) : Promise.resolve(null),
+        (enabled.binance && hasBinanceSymbol && binanceNum === null) ? safeFetchJson(`https://api.binance.com/api/v3/ticker/price?symbol=${binanceSymbol}`) : Promise.resolve(null),
+        (enabled.binance && hasBinanceSymbol && binanceNum === null) ? safeFetchJson(`https://fapi.binance.com/fapi/v2/ticker/price?symbol=${binanceSymbol}`) : Promise.resolve(null),
+        (enabled.bybit && hasBybitSymbol && bybitNum === null) ? safeFetchJson(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${bybitSymbol}`) : Promise.resolve(null),
+        (enabled.bybit && hasBybitSymbol && bybitNum === null) ? safeFetchJson(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${bybitSymbol}`) : Promise.resolve(null),
+      ]);
+
+      const result = {
+        upbitKrw: null,
+        usdtKrw: parseUpbitPrice(upbitUsdt),
+        bithumbKrw: null,
+        binanceSpotUsdt: null,
+        binanceFuturesUsdt: null,
+        bybitSpotUsdt: null,
+        bybitFuturesUsdt: null,
+        errors: [],
+      };
+
+      // 숫자 입력이면 해당 숫자를 티커 + 달러기준 가격(USDT)으로 간주
+      if (upbitNum !== null) result.upbitKrw = (result.usdtKrw !== null) ? upbitNum * result.usdtKrw : null;
+      else result.upbitKrw = parseUpbitPrice(upbitTicker);
+
+      if (bithumbNum !== null) result.bithumbKrw = (result.usdtKrw !== null) ? bithumbNum * result.usdtKrw : null;
+      else result.bithumbKrw = parseBithumbPrice(bithumb);
+
+      if (binanceNum !== null) {
+        result.binanceSpotUsdt = binanceNum;
+        result.binanceFuturesUsdt = binanceNum;
+      } else {
+        result.binanceSpotUsdt = parseBinancePrice(binanceSpot);
+        result.binanceFuturesUsdt = parseBinancePrice(binanceFutures);
+      }
+
+      if (bybitNum !== null) {
+        result.bybitSpotUsdt = bybitNum;
+        result.bybitFuturesUsdt = bybitNum;
+      } else {
+        result.bybitSpotUsdt = parseBybitPrice(bybitSpot);
+        result.bybitFuturesUsdt = parseBybitPrice(bybitFutures);
+      }
+
+      if (enabled.upbit && hasUpbitSymbol && result.usdtKrw === null) result.errors.push('업비트 KRW-USDT 조회실패');
+      if (enabled.upbit && hasUpbitSymbol && upbitNum === null && result.upbitKrw === null) result.errors.push(`업비트 ${upbitMarket} 미지원/조회실패`);
+      if (enabled.bithumb && hasBithumbSymbol && bithumbNum === null && result.bithumbKrw === null) result.errors.push(`빗썸 ${bithumbMarket} 미지원/조회실패`);
+      if (enabled.binance && hasBinanceSymbol && binanceNum === null && result.binanceSpotUsdt === null) result.errors.push(`바이낸스 현물 ${binanceSymbol} 미지원/조회실패`);
+      if (enabled.binance && hasBinanceSymbol && binanceNum === null && result.binanceFuturesUsdt === null) result.errors.push(`바이낸스 선물 ${binanceSymbol} 미지원/조회실패`);
+      if (enabled.bybit && hasBybitSymbol && bybitNum === null && result.bybitSpotUsdt === null) result.errors.push(`바이비트 현물 ${bybitSymbol} 미지원/조회실패`);
+      if (enabled.bybit && hasBybitSymbol && bybitNum === null && result.bybitFuturesUsdt === null) result.errors.push(`바이비트 선물 ${bybitSymbol} 미지원/조회실패`);
+
+      return result;
+    }
+
+    async function sendTelegram(text) {
+      const token = document.getElementById('tgToken').value.trim();
+      const chatId = document.getElementById('tgChatId').value.trim();
+      if (!token || !chatId) throw new Error('텔레그램 토큰/Chat ID를 입력하세요.');
+      const url = `https://api.telegram.org/bot${token}/sendMessage`;
+      const res = await fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, text }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error('텔레그램 전송 실패');
+    }
+
+    async function tick() {
+      try {
+        const symbols = currentSymbols();
+        const enabled = currentEnabled();
+        syncTickerLabel(symbols);
+
+        const threshold = Number(document.getElementById('threshold').value || 5);
+        const cooldownSec = Number(document.getElementById('cooldown').value || 300);
+        const gapThreshold = Number(document.getElementById('gapThreshold').value || 2);
+        const highPrice = Number(document.getElementById('priceAlertHigh').value || 0);
+        const lowPrice = Number(document.getElementById('priceAlertLow').value || 0);
+        const repeatPriceAlert = document.getElementById('repeatPriceAlert').checked;
+
+        const p = await getPrices(symbols, enabled);
+        const binanceGap = (p.binanceSpotUsdt !== null && p.binanceFuturesUsdt !== null) ? diffPercent(p.binanceSpotUsdt, p.binanceFuturesUsdt) : null;
+        const bybitGap = (p.bybitSpotUsdt !== null && p.bybitFuturesUsdt !== null) ? diffPercent(p.bybitSpotUsdt, p.bybitFuturesUsdt) : null;
+        const effectiveBinanceUsdt = p.binanceSpotUsdt !== null ? p.binanceSpotUsdt : p.binanceFuturesUsdt;
+        const effectiveBybitUsdt = p.bybitSpotUsdt !== null ? p.bybitSpotUsdt : p.bybitFuturesUsdt;
+        const binanceSpotKrw = (effectiveBinanceUsdt !== null && p.usdtKrw !== null) ? effectiveBinanceUsdt * p.usdtKrw : null;
+        const bybitSpotKrw = (effectiveBybitUsdt !== null && p.usdtKrw !== null) ? effectiveBybitUsdt * p.usdtKrw : null;
+
+        document.getElementById('pUpbit').textContent = p.upbitKrw !== null ? `${num(p.upbitKrw)} KRW` : '-';
+        document.getElementById('pBithumb').textContent = p.bithumbKrw !== null ? `${num(p.bithumbKrw)} KRW` : '-';
+        document.getElementById('pBinanceSpotUsdt').textContent = p.binanceSpotUsdt !== null ? `${num(p.binanceSpotUsdt, 6)} USDT` : '-';
+        document.getElementById('pBinanceFuturesUsdt').textContent = p.binanceFuturesUsdt !== null ? `${num(p.binanceFuturesUsdt, 6)} USDT` : '-';
+        document.getElementById('pBinanceGap').textContent = binanceGap !== null ? `${num(binanceGap, 2)}%` : '-';
+        document.getElementById('pBybitSpotUsdt').textContent = p.bybitSpotUsdt !== null ? `${num(p.bybitSpotUsdt, 6)} USDT` : '-';
+        document.getElementById('pBybitFuturesUsdt').textContent = p.bybitFuturesUsdt !== null ? `${num(p.bybitFuturesUsdt, 6)} USDT` : '-';
+        document.getElementById('pBybitGap').textContent = bybitGap !== null ? `${num(bybitGap, 2)}%` : '-';
+        document.getElementById('pUsdtKrw').textContent = p.usdtKrw !== null ? `${num(p.usdtKrw)} KRW` : '-';
+        document.getElementById('pBinanceSpotKrw').textContent = binanceSpotKrw !== null ? `${num(binanceSpotKrw)} KRW` : '-';
+        document.getElementById('pBybitSpotKrw').textContent = bybitSpotKrw !== null ? `${num(bybitSpotKrw)} KRW` : '-';
+        document.getElementById('updatedAt').textContent = new Date().toLocaleString();
+
+        const diffs = {
+          upbit_bithumb: (p.upbitKrw !== null && p.bithumbKrw !== null) ? diffPercent(p.upbitKrw, p.bithumbKrw) : null,
+          upbit_binance: (p.upbitKrw !== null && binanceSpotKrw !== null) ? diffPercent(p.upbitKrw, binanceSpotKrw) : null,
+          bithumb_binance: (p.bithumbKrw !== null && binanceSpotKrw !== null) ? diffPercent(p.bithumbKrw, binanceSpotKrw) : null,
+          upbit_bybit: (p.upbitKrw !== null && bybitSpotKrw !== null) ? diffPercent(p.upbitKrw, bybitSpotKrw) : null,
+          bithumb_bybit: (p.bithumbKrw !== null && bybitSpotKrw !== null) ? diffPercent(p.bithumbKrw, bybitSpotKrw) : null,
+          binance_bybit: (binanceSpotKrw !== null && bybitSpotKrw !== null) ? diffPercent(binanceSpotKrw, bybitSpotKrw) : null,
+        };
+
+        Object.entries(diffs).forEach(([k,v]) => updateDiffRow(k,v,threshold));
+
+        const ignoreGap = document.getElementById('ignoreSpotFuturesGap').checked;
+        const anyGapExceeded = [binanceGap, bybitGap].some(v => v !== null && v >= gapThreshold);
+        const hasAnyGapData = [binanceGap, bybitGap].some(v => v !== null);
+        const suppressAlerts = ignoreGap && anyGapExceeded;
+
+        const gapNotice = document.getElementById('gapNotice');
+        if (suppressAlerts) {
+          gapNotice.style.display = 'block';
+          gapNotice.textContent = `알림 차단중: 선물/현물 괴리 기준 ${num(gapThreshold,2)}% 이상 감지`;
+        } else if (ignoreGap && !hasAnyGapData) {
+          gapNotice.style.display = 'block';
+          gapNotice.textContent = '괴리 차단 계산 데이터를 얻지 못해 차단 미적용 상태입니다.';
+        } else {
+          gapNotice.style.display = 'none';
+          gapNotice.textContent = '';
+        }
+
+        const triggered = Object.entries(diffs).filter(([,v]) => v !== null && v >= threshold).map(([pair,diff]) => ({pair,diff}));
+
+        // 특정 가격 이상/이하 경고: 대표 달러가격(바이낸스 현물, 없으면 바이비트 현물) 사용
+        const refUsdtPrice = effectiveBinanceUsdt !== null ? effectiveBinanceUsdt : effectiveBybitUsdt;
+        const priceTriggered = [];
+        if (refUsdtPrice !== null) {
+          if (highPrice > 0 && refUsdtPrice >= highPrice) {
+            priceTriggered.push(`상한도달 ${num(refUsdtPrice, 6)} >= ${num(highPrice, 6)} USDT`);
+          }
+          if (lowPrice > 0 && refUsdtPrice <= lowPrice) {
+            priceTriggered.push(`하한도달 ${num(refUsdtPrice, 6)} <= ${num(lowPrice, 6)} USDT`);
+          }
+        }
+
+        if (!suppressAlerts && triggered.length > 0) {
+          const msgPrefix = `UPBIT:${symbols.upbit} / BITHUMB:${symbols.bithumb} / BINANCE:${symbols.binance} / BYBIT:${symbols.bybit}`;
+          const msg = `${msgPrefix} | ` + triggered.map(x => `${x.pair}: ${num(x.diff, 2)}%`).join(' | ');
+          const now = Date.now() / 1000;
+          if (document.getElementById('webAlertToggle').checked && (now - lastWebAlertAt >= cooldownSec)) {
+            lastWebAlertAt = now;
+            notifyWeb(`임계값 초과! ${msg}`);
+          }
+          if (document.getElementById('tgToggle').checked && (now - lastTelegramAlertAt >= cooldownSec)) {
+            lastTelegramAlertAt = now;
+            sendTelegram(`[가격차 알림]\n${msg}`).catch(err => showToast(err.message));
+          }
+        }
+
+        // 가격 조건 알림: 체크시 조회주기마다 계속 알림 가능
+        if (priceTriggered.length > 0 && !suppressAlerts) {
+          const pmsg = `가격조건 알림(${symbols.binance}/${symbols.bybit}): ` + priceTriggered.join(' | ');
+          const now = Date.now() / 1000;
+          const canWeb = repeatPriceAlert || (now - lastWebAlertAt >= cooldownSec);
+          const canTg = repeatPriceAlert || (now - lastTelegramAlertAt >= cooldownSec);
+          if (document.getElementById('webAlertToggle').checked && canWeb) {
+            if (!repeatPriceAlert) lastWebAlertAt = now;
+            notifyWeb(pmsg);
+          }
+          if (document.getElementById('tgToggle').checked && canTg) {
+            if (!repeatPriceAlert) lastTelegramAlertAt = now;
+            sendTelegram(`[가격 조건 알림]\n${pmsg}`).catch(err => showToast(err.message));
+          }
+        }
+
+        if (p.errors && p.errors.length) {
+          const log = document.getElementById('errorLog');
+          log.textContent = `${new Date().toLocaleTimeString()} ${p.errors.join(' | ')}\n` + log.textContent;
+        }
+      } catch (err) {
+        showToast(`오류: ${err.message}`);
+        const log = document.getElementById('errorLog');
+        log.textContent = `${new Date().toLocaleTimeString()} ${err.message}\n` + log.textContent;
+      }
+    }
+
+    function startMonitoring() {
+      const interval = Math.max(3, Number(document.getElementById('interval').value || 5));
+      document.getElementById('statusText').textContent = '상태: 실행 중';
+      showToast('모니터링 시작');
+      requestNotificationPermission();
+      clearInterval(timer);
+      tick();
+      timer = setInterval(tick, interval * 1000);
+    }
+
+    function stopMonitoring() {
+      clearInterval(timer);
+      timer = null;
+      document.getElementById('statusText').textContent = '상태: 중지';
+      document.getElementById('gapNotice').style.display = 'none';
+      showToast('모니터링 중지');
+    }
+
+    async function testAlert(mode) {
+      if (mode === 'web') {
+        notifyWeb('[테스트] 웹 알림 테스트입니다.');
+        return;
+      }
+      await sendTelegram('[테스트] 가격차 모니터 텔레그램 알림 테스트');
+      showToast('텔레그램 테스트 전송 완료');
+    }
+
+    document.getElementById('startBtn').addEventListener('click', () => startMonitoring());
+    document.getElementById('stopBtn').addEventListener('click', () => stopMonitoring());
+    document.getElementById('webTestBtn').addEventListener('click', () => testAlert('web').catch(e => showToast(e.message)));
+    document.getElementById('tgTestBtn').addEventListener('click', () => testAlert('telegram').catch(e => showToast(e.message)));
+  </script>
+</body>
+</html>
